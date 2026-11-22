@@ -95,8 +95,8 @@ android {
         // The bundled Linux runtime executes python out of the app's files
         // directory, so this app stays in the pre-29 SELinux domain like Termux.
         targetSdkVersion 28
-        versionCode 14
-        versionName "1.0.1"
+        versionCode 15
+        versionName "1.0.2"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }

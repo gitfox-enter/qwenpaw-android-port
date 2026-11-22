@@ -44,7 +44,9 @@ export function AppearanceSheet({
       presentationStyle="formSheet"
       visible={visible}
     >
-      <SafeAreaView edges={["bottom"]} style={styles.root}>
+      {/* edges top+bottom: without the top inset the "外观" heading slides
+          under the status-bar clock on notched phones. */}
+      <SafeAreaView edges={["top", "bottom"]} style={styles.root}>
         <View style={styles.header}>
           <View style={styles.heading}>
             <Text style={styles.title}>外观</Text>

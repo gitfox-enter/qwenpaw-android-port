@@ -28,6 +28,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -331,7 +332,10 @@ export default function ChatScreen() {
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "left", "right"]}>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.flex}>
+      {/* padding on Android too: with undefined the composer stays behind
+          the IME (user cannot see what they type); RN height mode is
+          unreliable on newer Android, padding is the reliable one. */}
+      <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={StatusBar.currentHeight ?? 0} style={styles.flex}>
         <View style={styles.shell}>
           <View style={styles.header}>
             <Pressable accessibilityLabel="返回" onPress={() => router.back()} style={styles.backButton}>

@@ -57,6 +57,10 @@ public class DeviceBridgeService extends Service {
     private android.hardware.display.VirtualDisplay vdisplay;
     private ImageReader vdReader;
     private int vdDisplayId = -1;
+    // Headless browser for the agent: an offscreen WebView that loads pages
+    // and returns rendered text. Lighter than Playwright/Chromium in proot or
+    // an xfce desktop - same idea as Operit's built-in browser tool.
+    private android.webkit.WebView browser;
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -198,6 +202,21 @@ public class DeviceBridgeService extends Service {
                     }
                     return json("{\"active\":true,\"displayId\":" + vdDisplayId + "}");
                 }
+                case "/browser/open": {
+                    return browserOpen(req.body.trim());
+                }
+                case "/browser/status": {
+                    return browserStatus();
+                }
+                case "/browser/text": {
+                    return browserText();
+                }
+                case "/browser/eval": {
+                    return browserEval(req.body.trim());
+                }
+                case "/browser/close": {
+                    return browserClose();
+                }
                 case "/screen/screenshot": {
                     if (intArg(req, "display", -1) == vdDisplayId && vdisplay != null) {
                         Bitmap frame = captureVirtualScreen();
@@ -285,6 +304,174 @@ public class DeviceBridgeService extends Service {
         } catch (Exception e) {
             return err("bridge error: " + e.getMessage());
         }
+    }
+
+    // ------------------------------------------------- headless browser
+
+    /**
+     * Agent browser on top of an offscreen WebView. Loads a URL, waits for
+     * render, and hands back the page text - lighter than Playwright/Chromium
+     * in proot or a full desktop, same idea as Operit's built-in tool.
+     */
+    private Response browserOpen(String url) {
+        try {
+            if (url == null || url.isEmpty()) return err("url required");
+            if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                url = "https://" + url;
+            }
+            final String target = url;
+            final Object latch = new Object();
+            final String[] failure = {null};
+            final boolean[] done = {false};
+            synchronized (latch) {
+                getMainHandler().post(() -> {
+                    try {
+                        if (browser == null) browser = createBrowser();
+                        browser.loadUrl(target);
+                    } catch (Exception e) {
+                        failure[0] = e.getMessage();
+                    } finally {
+                        done[0] = true;
+                        synchronized (latch) {
+                            latch.notify();
+                        }
+                    }
+                });
+                latch.wait(10000);
+            }
+            if (failure[0] != null) return err("browser open: " + failure[0]);
+            if (!done[0]) return err("browser open timed out");
+            // Give the page a moment to start rendering; text follows later.
+            Thread.sleep(2500);
+            return json("{\"ok\":true,\"url\":" + jsonQuote(target) + "}");
+        } catch (Exception e) {
+            return err("browser open: " + e.getMessage());
+        }
+    }
+
+    private Response browserStatus() {
+        if (browser == null) return json("{\"open\":false}");
+        return json("{\"open\":true,\"url\":"
+                + jsonQuote(browser.getUrl() == null ? "" : browser.getUrl()) + "}");
+    }
+
+    /** Extract the rendered text of the current page on the main thread. */
+    private Response browserText() {
+        try {
+            if (browser == null) return err("no page open; POST /browser/open first");
+            final Object latch = new Object();
+            final String[] text = {null};
+            synchronized (latch) {
+                getMainHandler().post(() -> {
+                    try {
+                        // document.body.innerText keeps visible text in DOM
+                        // order; scripts get one extra beat to finish.
+                        browser.evaluateJavascript(
+                                "(function(){return document.body ? document.body.innerText : '';})()",
+                                value -> {
+                                    text[0] = value == null ? "" : value;
+                                    synchronized (latch) {
+                                        latch.notify();
+                                    }
+                                });
+                    } catch (Exception e) {
+                        text[0] = "eval failed: " + e.getMessage();
+                        synchronized (latch) {
+                            latch.notify();
+                        }
+                    }
+                });
+                latch.wait(10000);
+            }
+            if (text[0] == null) return err("text extraction timed out");
+            // evaluateJavascript returns a JSON-encoded string; unquote it.
+            String body = text[0];
+            if (body.length() >= 2 && body.startsWith("\"") && body.endsWith("\"")) {
+                body = body.substring(1, body.length() - 1)
+                        .replace("\\\"", "\"")
+                        .replace("\\n", "\n")
+                        .replace("\\\\", "\\");
+            }
+            return text(body);
+        } catch (Exception e) {
+            return err("browser text: " + e.getMessage());
+        }
+    }
+
+    /** Run arbitrary JS in the page and get the JSON-encoded result. */
+    private Response browserEval(String script) {
+        try {
+            if (browser == null) return err("no page open; POST /browser/open first");
+            if (script == null || script.isEmpty()) return err("script required");
+            final Object latch = new Object();
+            final String[] result = {null};
+            synchronized (latch) {
+                getMainHandler().post(() -> {
+                    try {
+                        browser.evaluateJavascript(script, value -> {
+                            result[0] = value == null ? "null" : value;
+                            synchronized (latch) {
+                                latch.notify();
+                            }
+                        });
+                    } catch (Exception e) {
+                        result[0] = "eval failed: " + e.getMessage();
+                        synchronized (latch) {
+                            latch.notify();
+                        }
+                    }
+                });
+                latch.wait(10000);
+            }
+            if (result[0] == null) return err("eval timed out");
+            return text(result[0]);
+        } catch (Exception e) {
+            return err("browser eval: " + e.getMessage());
+        }
+    }
+
+    private synchronized Response browserClose() {
+        final Object latch = new Object();
+        if (browser != null) {
+            synchronized (latch) {
+                getMainHandler().post(() -> {
+                    try {
+                        browser.destroy();
+                    } catch (Exception ignored) {
+                    }
+                    browser = null;
+                    synchronized (latch) {
+                        latch.notify();
+                    }
+                });
+                try {
+                    latch.wait(3000);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+        return ok(true);
+    }
+
+    private android.webkit.WebView createBrowser() {
+        android.webkit.WebView wv = new android.webkit.WebView(this);
+        android.webkit.WebSettings s = wv.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setUserAgentString(
+                "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 "
+                        + "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36");
+        wv.setLayoutParams(new android.view.ViewGroup.LayoutParams(1080, 1920));
+        wv.measure(
+                android.view.View.MeasureSpec.makeMeasureSpec(1080, android.view.View.MeasureSpec.EXACTLY),
+                android.view.View.MeasureSpec.makeMeasureSpec(1920, android.view.View.MeasureSpec.EXACTLY));
+        wv.layout(0, 0, 1080, 1920);
+        return wv;
+    }
+
+    private android.os.Handler getMainHandler() {
+        return new android.os.Handler(getMainLooper());
     }
 
     // ----------------------------------------------------- shizuku shell

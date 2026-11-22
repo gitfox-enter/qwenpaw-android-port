@@ -1,0 +1,632 @@
+package io.agentscope.qwenpaw.mobile;
+
+import android.app.ActivityOptions;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.Service;
+import android.content.Context;
+import android.os.Build;
+import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.PixelFormat;
+import android.hardware.display.DisplayManager;
+import android.media.Image;
+import android.media.ImageReader;
+import android.os.IBinder;
+import android.view.Display;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * Loopback HTTP bridge that hands the proot agent native device powers
+ * (Zafiro-style screen driving): accessibility tree, gestures, screenshots
+ * and app launching. Loopback-only, no auth needed — only on-device apps can
+ * reach it, which is exactly the trust boundary we want.
+ *
+ * Endpoints:
+ *   GET  /status                     → {"connected":bool,"screen":w×h}
+ *   GET  /screen/tree                → formatted accessibility tree
+ *   POST /screen/tap  {x,y}          → tap gesture
+ *   POST /screen/swipe {x1,y1,x2,y2,ms} → swipe gesture
+ *   GET  /screen/screenshot          → PNG (API 30+, a11y capture)
+ *   POST /app/launch  {package}      → launch app by package
+ *   GET  /media/<anything>           → 404 stub (future)
+ */
+public class DeviceBridgeService extends Service {
+
+    public static final int PORT = 18080;
+    private static final String CHANNEL = "qwenpaw-device-bridge";
+    private static final int NOTIFICATION_ID = 4302;
+    private static final AtomicBoolean RUNNING = new AtomicBoolean(false);
+
+    private ServerSocket server;
+    private Thread acceptThread;
+    // Zafiro/Mika-style hidden background screen: the agent launches and
+    // drives apps on this virtual display while the user keeps the main one.
+    private android.hardware.display.VirtualDisplay vdisplay;
+    private ImageReader vdReader;
+    private int vdDisplayId = -1;
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel ch = new NotificationChannel(
+                    CHANNEL, "QwenPaw 设备控制", NotificationManager.IMPORTANCE_MIN);
+            NotificationManager nm =
+                    (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.createNotificationChannel(ch);
+        }
+        Notification.Builder b = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? new Notification.Builder(this, CHANNEL)
+                : new Notification.Builder(this);
+        startForeground(NOTIFICATION_ID,
+                b.setContentTitle("QwenPaw 设备控制")
+                        .setContentText("本机桥服务运行中 (127.0.0.1:18080)")
+                        .setSmallIcon(android.R.drawable.stat_sys_download)
+                        .setOngoing(true)
+                        .build());
+        startBridge();
+    }
+
+    @Override
+    public void onDestroy() {
+        RUNNING.set(false);
+        try {
+            if (server != null) server.close();
+        } catch (IOException ignored) {
+        }
+        super.onDestroy();
+    }
+
+    private void startBridge() {
+        if (!RUNNING.compareAndSet(false, true)) return;
+        acceptThread = new Thread(() -> {
+            // Self-healing accept loop: any socket failure is logged and the
+            // listener is rebuilt, so a single bad request can never take the
+            // bridge down silently again.
+            while (RUNNING.get()) {
+                try {
+                    server = new ServerSocket(PORT, 8,
+                            java.net.InetAddress.getByName("127.0.0.1"));
+                    android.util.Log.i("qwenpaw-bridge", "listening on 18080");
+                    while (RUNNING.get()) {
+                        Socket sock = server.accept();
+                        handle(sock);
+                    }
+                } catch (IOException e) {
+                    if (RUNNING.get()) {
+                        android.util.Log.w("qwenpaw-bridge",
+                                "accept failed, retrying: " + e.getMessage());
+                        try {
+                            Thread.sleep(1500);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                    }
+                }
+            }
+        }, "qwenpaw-bridge");
+        acceptThread.start();
+    }
+
+    private void handle(Socket sock) {
+        new Thread(() -> {
+            try (Socket s = sock) {
+                s.setSoTimeout(8000);
+                Request req = parse(s.getInputStream());
+                if (req == null) return;
+                Response resp = route(req);
+                write(s, resp);
+            } catch (Exception ignored) {
+            }
+        }, "qwenpaw-bridge-req").start();
+    }
+
+    // ------------------------------------------------------------- routing
+
+    private Response route(Request req) {
+        try {
+            switch (req.path) {
+                case "/status": {
+                    boolean a11y = QwenPawA11yService.isConnected();
+                    return json("{\"connected\":" + a11y
+                            + ",\"port\":" + PORT
+                            + ",\"screen\":\"" + screenMetrics() + "\"}");
+                }
+                case "/screen/tree": {
+                    int disp = intArg(req, "display", -1);
+                    return text(QwenPawA11yService.dumpTree(disp));
+                }
+                case "/screen/tap": {
+                    int x = intArg(req, "x", -1);
+                    int y = intArg(req, "y", -1);
+                    if (x < 0 || y < 0) return err("x,y required");
+                    return ok(QwenPawA11yService.gesture(
+                            intArg(req, "display", -1), x, y, x, y, 60));
+                }
+                case "/screen/swipe": {
+                    boolean done = QwenPawA11yService.gesture(
+                            intArg(req, "display", -1),
+                            intArg(req, "x1", -1), intArg(req, "y1", -1),
+                            intArg(req, "x2", -1), intArg(req, "y2", -1),
+                            intArg(req, "ms", 300));
+                    return ok(done);
+                }
+                case "/screen/vdisplay/create": {
+                    return createVirtualScreen(req);
+                }
+                case "/screen/vdisplay/destroy": {
+                    return destroyVirtualScreen();
+                }
+                case "/shizuku/status": {
+                    boolean bound;
+                    boolean granted;
+                    try {
+                        bound = rikka.shizuku.Shizuku.pingBinder();
+                        granted = bound && rikka.shizuku.Shizuku.checkSelfPermission()
+                                == android.content.pm.PackageManager.PERMISSION_GRANTED;
+                    } catch (Throwable t) {
+                        bound = false;
+                        granted = false;
+                    }
+                    return json("{\"shizuku\":" + bound + ",\"granted\":" + granted + "}");
+                }
+                case "/shell/exec": {
+                    return shizukuExec(req.body);
+                }
+                case "/screen/vdisplay/status": {
+                    if (vdisplay == null) {
+                        return json("{\"active\":false,\"displayId\":-1}");
+                    }
+                    return json("{\"active\":true,\"displayId\":" + vdDisplayId + "}");
+                }
+                case "/screen/screenshot": {
+                    if (intArg(req, "display", -1) == vdDisplayId && vdisplay != null) {
+                        Bitmap frame = captureVirtualScreen();
+                        if (frame == null) {
+                            return err("no frame yet on virtual display");
+                        }
+                        ByteArrayOutputStream png2 = new ByteArrayOutputStream();
+                        frame.compress(Bitmap.CompressFormat.PNG, 80, png2);
+                        return new Response(200, "image/png", png2.toByteArray());
+                    }
+                    Bitmap[] holder = new Bitmap[1];
+                    Object latch = new Object();
+                    QwenPawA11yService.takeScreenshot(bmp -> {
+                        holder[0] = bmp;
+                        synchronized (latch) {
+                            latch.notify();
+                        }
+                    });
+                    synchronized (latch) {
+                        latch.wait(6000);
+                    }
+                    Bitmap bmp = holder[0];
+                    if (bmp == null) return err("screenshot unavailable (needs API 30+ and a11y on)");
+                    ByteArrayOutputStream png = new ByteArrayOutputStream();
+                    bmp.compress(Bitmap.CompressFormat.PNG, 80, png);
+                    return new Response(200, "image/png", png.toByteArray());
+                }
+                case "/app/launch": {
+                    String pkg = req.body.trim();
+                    if (pkg.startsWith("{")) {
+                        pkg = req.body.replaceAll(".*\"package\"\\s*:\\s*\"([^\"]+)\".*", "$1");
+                    }
+                    int disp = intArg(req, "display", -1);
+                    if (disp == vdDisplayId && vdisplay == null) {
+                        return err("virtual display not created; POST /screen/vdisplay/create first");
+                    }
+                    if (pkg.isEmpty()) return err("package required");
+                    Intent i = getPackageManager().getLaunchIntentForPackage(pkg);
+                    if (i == null) return err("package not installed: " + pkg);
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    if (disp >= 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        ActivityOptions opts = ActivityOptions.makeBasic();
+                        opts.setLaunchDisplayId(disp);
+                        startActivity(i, opts.toBundle());
+                    } else {
+                        startActivity(i);
+                    }
+                    return ok(true);
+                }
+                default:
+                    return err("unknown endpoint: " + req.path);
+            }
+        } catch (Exception e) {
+            return err("bridge error: " + e.getMessage());
+        }
+    }
+
+    // ----------------------------------------------------- shizuku shell
+
+    /**
+     * Run a shell command through Shizuku (adb/shell uid). This is the
+     * privileged path the agent uses for cross-display launches and input
+     * injection: am start --display, input swipe -d, screencap -d, etc.
+     * Body is the raw command line; executed via sh -c.
+     */
+    private Response shizukuExec(String cmd) {
+        try {
+            if (cmd == null || cmd.trim().isEmpty()) return err("command required");
+            boolean bound;
+            try {
+                bound = rikka.shizuku.Shizuku.pingBinder();
+            } catch (Throwable t) {
+                bound = false;
+            }
+            if (!bound) {
+                return err("shizuku not running; install/start the Shizuku app first");
+            }
+            if (rikka.shizuku.Shizuku.checkSelfPermission()
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                return err("shizuku permission not granted yet; authorize QwenPaw "
+                        + "inside the Shizuku app, then retry");
+            }
+            // Shizuku.getBinder() is the official path for the authorized
+            // service binder; SystemServiceHelper.getSystemService("shizuku")
+            // returns null from an app process on Android 13+ (ServiceManager
+            // is restricted), which made newProcess throw a null-message NPE.
+            android.os.IBinder binder = rikka.shizuku.Shizuku.getBinder();
+            if (binder == null) {
+                return err("shizuku service binder null; restart Shizuku and retry");
+            }
+            moe.shizuku.server.IShizukuService service =
+                    moe.shizuku.server.IShizukuService.Stub.asInterface(binder);
+            // newProcess returns an IRemoteProcess (binder mirror of Process):
+            // reading its getInputStream yields combined stdout/stderr.
+            moe.shizuku.server.IRemoteProcess proc = service.newProcess(
+                    new String[]{"sh", "-c", cmd.trim()},
+                    new String[]{"PATH=/system/bin:/system/xbin:/odm/bin:/vendor/bin"},
+                    "/");
+            android.os.ParcelFileDescriptor pfd = proc.getInputStream();
+            android.os.ParcelFileDescriptor epfd = null;
+            try {
+                epfd = proc.getErrorStream();
+            } catch (Exception ignore) {
+            }
+            java.io.InputStream fin =
+                    new java.io.FileInputStream(pfd.getFileDescriptor());
+            java.io.InputStream ein = epfd == null ? null
+                    : new java.io.FileInputStream(epfd.getFileDescriptor());
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            long deadline = System.currentTimeMillis() + 20000;
+            boolean finEof = false;
+            boolean einEof = (ein == null);
+            try {
+                while (System.currentTimeMillis() < deadline && out.size() < 512 * 1024) {
+                    boolean any = false;
+                    if (!finEof) {
+                        try {
+                            int avail = fin.available();
+                            if (avail > 0) {
+                                n = fin.read(buf, 0, Math.min(buf.length, avail));
+                                if (n > 0) {
+                                    out.write(buf, 0, n);
+                                    any = true;
+                                }
+                            }
+                        } catch (IOException eof) {
+                            // Process exited and the pipe was torn down.
+                            finEof = true;
+                        }
+                    }
+                    if (!einEof) {
+                        try {
+                            int avail = ein.available();
+                            if (avail > 0) {
+                                n = ein.read(buf, 0, Math.min(buf.length, avail));
+                                if (n > 0) {
+                                    out.write(buf, 0, n);
+                                    any = true;
+                                }
+                            }
+                        } catch (IOException eof) {
+                            einEof = true;
+                        }
+                    }
+                    if (finEof && einEof) break;
+                    if (!any) {
+                        boolean exited = false;
+                        try {
+                            proc.exitValue();
+                            exited = true;
+                        } catch (Exception stillRunning) {
+                            exited = false;
+                        }
+                        if (exited) {
+                            // Drain whatever is left, then stop.
+                            if (!finEof) {
+                                try {
+                                    int avail = fin.available();
+                                    while (avail > 0 && out.size() < 512 * 1024) {
+                                        n = fin.read(buf, 0, Math.min(buf.length, avail));
+                                        if (n <= 0) break;
+                                        out.write(buf, 0, n);
+                                        avail = fin.available();
+                                    }
+                                } catch (IOException ignore) {
+                                }
+                            }
+                            break;
+                        }
+                        Thread.sleep(120);
+                    }
+                }
+            } finally {
+                try {
+                    fin.close();
+                } catch (IOException ignore) {
+                }
+                if (ein != null) {
+                    try {
+                        ein.close();
+                    } catch (IOException ignore) {
+                    }
+                }
+                proc.destroy();
+            }
+            int exit = -1;
+            try {
+                exit = proc.exitValue();
+            } catch (Exception ignore) {
+            }
+            return json("{\"exit\":" + exit + ",\"output\":"
+                    + jsonQuote(out.toString("UTF-8")) + "}");
+        } catch (Exception e) {
+            return err("shizuku exec: " + e.getClass().getName() + ": " + e.getMessage());
+        }
+    }
+
+    /** Minimal JSON string encoder for embedding raw command output. */
+    private static String jsonQuote(String raw) {
+        StringBuilder sb = new StringBuilder("\"");
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '"') {
+                sb.append((char) 92).append((char) 34);
+            } else if (c == 92) {
+                sb.append((char) 92).append((char) 92);
+            } else if (c == (char) 10) {
+                sb.append((char) 92).append('n');
+            } else if (c == (char) 13) {
+                sb.append((char) 92).append('r');
+            } else if (c == (char) 9) {
+                sb.append((char) 92).append('t');
+            } else if (c < 0x20) {
+                sb.append(String.format("\\u" + "%04x", (int) c));
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.append("\"").toString();
+    }
+
+    // ------------------------------------------------- virtual screen (Mika
+    // style hidden background display): the agent launches and drives real
+    // apps here while the user keeps using the main screen.
+
+    private synchronized Response createVirtualScreen(Request req) {
+        try {
+            destroyVirtualScreen();
+            DisplayManager dm =
+                    (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
+            int w = intArg(req, "width", 720);
+            int h = intArg(req, "height", 1560);
+            int dpi = intArg(req, "dpi", 320);
+            vdReader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2);
+            // PUBLIC keeps the display out of the "private" bucket: private
+            // virtual displays get no WindowsForAccessibilityObserver, so the
+            // a11y tree endpoint can never see them. Mirrors Twoyi's twin
+            // display recipe (TRUSTED|OWN_CONTENT_ONLY|..., shell uid).
+            vdisplay = dm.createVirtualDisplay("qwenpaw-agent",
+                    w, h, dpi, vdReader.getSurface(),
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC
+                            | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);
+            if (vdisplay == null) return err("createVirtualDisplay failed");
+            Display disp = vdisplay.getDisplay();
+            vdDisplayId = disp.getDisplayId();
+            return json("{\"ok\":true,\"displayId\":" + vdDisplayId
+                    + ",\"width\":" + w + ",\"height\":" + h + "}");
+        } catch (Exception e) {
+            return err("vdisplay create: " + e.getMessage());
+        }
+    }
+
+    private synchronized Response destroyVirtualScreen() {
+        try {
+            if (vdisplay != null) {
+                vdisplay.release();
+                vdisplay = null;
+            }
+            if (vdReader != null) {
+                vdReader.close();
+                vdReader = null;
+            }
+            vdDisplayId = -1;
+            return json("{\"ok\":true}");
+        } catch (Exception e) {
+            return err("vdisplay destroy: " + e.getMessage());
+        }
+    }
+
+    private Bitmap captureVirtualScreen() {
+        try {
+            Image img = vdReader.acquireLatestImage();
+            if (img == null) return null;
+            Image.Plane plane = img.getPlanes()[0];
+            java.nio.ByteBuffer buf = plane.getBuffer();
+            int w = img.getWidth();
+            int h = img.getHeight();
+            int rowStride = plane.getRowStride();
+            int pixelStride = plane.getPixelStride();
+            Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            if (rowStride == w * pixelStride) {
+                buf.rewind();
+                bmp.copyPixelsFromBuffer(buf);
+            } else {
+                int[] line = new int[w];
+                for (int row = 0; row < h; row++) {
+                    buf.position(row * rowStride);
+                    for (int col = 0; col < w; col++) {
+                        line[col] = buf.getInt();
+                    }
+                    bmp.setPixels(line, 0, w, 0, row, w, 1);
+                }
+                buf.rewind();
+            }
+            img.close();
+            return bmp;
+        } catch (Exception e) {
+            android.util.Log.w("qwenpaw-bridge", "capture: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private String screenMetrics() {
+        android.util.DisplayMetrics m = getResources().getDisplayMetrics();
+        return m.widthPixels + "x" + m.heightPixels;
+    }
+
+    private static Response ok(boolean done) {
+        return json("{\"ok\":" + done + "}");
+    }
+
+    private static Response json(String body) {
+        return new Response(200, "application/json",
+                body.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static Response text(String body) {
+        return new Response(200, "text/plain; charset=utf-8",
+                body.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static Response err(String message) {
+        return json("{\"error\":\"" + message.replace("\"", "'") + "\"}");
+    }
+
+    // ------------------------------------------------------------- plumbing
+
+    private static final class Request {
+        String method;
+        String path;
+        Map<String, String> query = new HashMap<>();
+        String body;
+    }
+
+    private static final class Response {
+        final int code;
+        final String type;
+        final byte[] body;
+
+        Response(int code, String type, byte[] body) {
+            this.code = code;
+            this.type = type;
+            this.body = body;
+        }
+    }
+
+    private Request parse(InputStream in) throws IOException {
+        String requestLine = readLine(in);
+        if (requestLine == null || requestLine.isEmpty()) return null;
+        String[] parts = requestLine.split(" ");
+        if (parts.length < 2) return null;
+        Request req = new Request();
+        req.method = parts[0];
+        String target = parts[1];
+        int q = target.indexOf('?');
+        if (q >= 0) {
+            for (String pair : target.substring(q + 1).split("&")) {
+                int eq = pair.indexOf('=');
+                if (eq > 0) {
+                    req.query.put(URLDecoder.decode(pair.substring(0, eq), "UTF-8"),
+                            URLDecoder.decode(pair.substring(eq + 1), "UTF-8"));
+                }
+            }
+            target = target.substring(0, q);
+        }
+        req.path = URLDecoder.decode(target, "UTF-8");
+        int contentLength = 0;
+        String header;
+        while ((header = readLine(in)) != null && !header.isEmpty()) {
+            if (header.toLowerCase().startsWith("content-length:")) {
+                contentLength = Integer.parseInt(
+                        header.substring(15).trim());
+            }
+        }
+        if (contentLength > 0 && contentLength < 1 << 20) {
+            byte[] buf = new byte[contentLength];
+            int off = 0;
+            while (off < contentLength) {
+                int n = in.read(buf, off, contentLength - off);
+                if (n < 0) break;
+                off += n;
+            }
+            req.body = new String(buf, 0, off, StandardCharsets.UTF_8);
+        }
+        // POST bodies may also be form-encoded query strings.
+        if (req.body != null && req.query.isEmpty()
+                && req.body.startsWith("{") == false) {
+            for (String pair : req.body.split("&")) {
+                int eq = pair.indexOf('=');
+                if (eq > 0) {
+                    req.query.put(URLDecoder.decode(pair.substring(0, eq), "UTF-8"),
+                            URLDecoder.decode(pair.substring(eq + 1), "UTF-8"));
+                }
+            }
+        }
+        return req;
+    }
+
+    private static String readLine(InputStream in) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        int c;
+        while ((c = in.read()) != -1) {
+            if (c == '\n') break;
+            if (c != '\r') sb.append((char) c);
+            if (sb.length() > 8192) break;
+        }
+        return sb.toString();
+    }
+
+    private int intArg(Request req, String name, int fallback) {
+        String v = req.query.get(name);
+        if (v == null) return fallback;
+        try {
+            return (int) Double.parseDouble(v);
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    private void write(Socket sock, Response resp) throws IOException {
+        OutputStream out = sock.getOutputStream();
+        String head = "HTTP/1.1 " + resp.code + " OK\r\n"
+                + "Content-Type: " + resp.type + "\r\n"
+                + "Content-Length: " + resp.body.length + "\r\n"
+                + "Connection: close\r\n\r\n";
+        out.write(head.getBytes(StandardCharsets.UTF_8));
+        out.write(resp.body);
+        out.flush();
+    }
+}

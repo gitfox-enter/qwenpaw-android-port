@@ -38,17 +38,20 @@ yarn-error.*
 
 example
 
-# generated native folders
+# generated native folders —— android/ 里有自研桥接源码（DeviceBridgeService 等），必须备份
 /ios
-/android
+# /android 保留源码，改为排除其构建产物（见下方 ZCode 段）
 
 # --- ZCode 备份补充 ---
-# Android native build outputs
+# Android native 构建产物/可重建大资产（源码保留）
 android/app/build/
 android/app/.cxx/
 android/build/
 android/.gradle/
 android/.idea/
+android/gradle-dist*/
+android/gradle-9.3.1-bin.zip
+android/app/src/main/assets/*.part
 *.apk
 *.aab
 *.tar.gz
@@ -56,5 +59,4 @@ android/.idea/
 *.log
 rootfs*
 .expo/
-android/gradle-dist/
 *.bin.zip

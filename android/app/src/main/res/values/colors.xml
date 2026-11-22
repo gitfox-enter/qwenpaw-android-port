@@ -1,0 +1,24 @@
+<resources>
+  <color name="splashscreen_background">#F3EFE8</color>
+  <color name="iconBackground">#F3EFE8</color>
+  <color name="colorPrimary">#023c69</color>
+  <color name="qwenpaw_canvas">#EBE7DF</color>
+  <color name="qwenpaw_grouped_background">#F6F3ED</color>
+  <color name="qwenpaw_surface">#FFFDF9</color>
+  <color name="qwenpaw_surface_strong">#FFFFFF</color>
+  <color name="qwenpaw_surface_soft">#EEEAE2</color>
+  <color name="qwenpaw_tab_bar">#FFFDF9</color>
+  <color name="qwenpaw_search_background">#EEEAE2</color>
+  <color name="qwenpaw_pressed">#E7E1D8</color>
+  <color name="qwenpaw_ink">#1D1B18</color>
+  <color name="qwenpaw_muted">#66615B</color>
+  <color name="qwenpaw_faint">#6D6760</color>
+  <color name="qwenpaw_line">#E4DDD4</color>
+  <color name="qwenpaw_hairline">#DED6CC</color>
+  <color name="qwenpaw_accent_dark">#A94008</color>
+  <color name="qwenpaw_accent_soft">#FFF0E5</color>
+  <color name="qwenpaw_positive">#2F7B56</color>
+  <color name="qwenpaw_danger">#A63F39</color>
+  <color name="qwenpaw_scrim">#4D140F0C</color>
+  <color name="notification_icon_color">#C84A00</color>
+</resources>

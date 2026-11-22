@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="a11y_summary">QwenPaw 屏幕驱动</string>
+    <string name="a11y_description">允许 QwenPaw 读取屏幕内容、执行点击滑动手势与截屏，从而代替你操作手机。所有处理均在本机完成。</string>
+</resources>

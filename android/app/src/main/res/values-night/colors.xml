@@ -1,0 +1,21 @@
+<resources>
+  <color name="splashscreen_background">#0E0D0C</color>
+  <color name="qwenpaw_canvas">#0E0D0C</color>
+  <color name="qwenpaw_grouped_background">#151412</color>
+  <color name="qwenpaw_surface">#211F1C</color>
+  <color name="qwenpaw_surface_strong">#2E2B27</color>
+  <color name="qwenpaw_surface_soft">#2A2723</color>
+  <color name="qwenpaw_tab_bar">#211F1C</color>
+  <color name="qwenpaw_search_background">#2A2723</color>
+  <color name="qwenpaw_pressed">#35312C</color>
+  <color name="qwenpaw_ink">#F6F1E9</color>
+  <color name="qwenpaw_muted">#AAA39A</color>
+  <color name="qwenpaw_faint">#8E877F</color>
+  <color name="qwenpaw_line">#37332E</color>
+  <color name="qwenpaw_hairline">#3D3933</color>
+  <color name="qwenpaw_accent_dark">#FFA06B</color>
+  <color name="qwenpaw_accent_soft">#3B261B</color>
+  <color name="qwenpaw_positive">#70C496</color>
+  <color name="qwenpaw_danger">#FF8B83</color>
+  <color name="qwenpaw_scrim">#9E000000</color>
+</resources>

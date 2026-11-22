@@ -57,17 +57,21 @@
 
 ## 4. 未完成任务（按优先级）
 
-### 🔴 P0：Shizuku `/shell/exec` 端点真机验证（**编译已完成，2026-11-22 build48 SUCCESS**）
+### ✅ P0：Shizuku 虚拟屏闭环 —— **已真机验证通过（2026-11-22）**
 - 目的：Mika 方案要求虚拟屏启动 app 必须 shell 权限（普通 startActivity 会被系统拉回主屏，虚拟屏无内容）
-- 现状：`DeviceBridgeService.shizukuExec()` 用 `IShizukuService.newProcess`（返回 IRemoteProcess）→ `getInputStream()` 返回 ParcelFileDescriptor → FileInputStream 读输出。**编译已通过，APK 已生成**（`D:\Movies\Download\QwenPaw-Mobile-RN-v4-shizuku.apk`，753MB），但设备离线未装机，真机行为未验证
-- 接入点：`app/build.gradle` 已加 `dev.rikka.shizuku:api/provider:13.1.5`；Manifest 已注册 ShizukuProvider
-- 验证剧本：
-  1. 手机装 **Shizuku App**（酷安/官网），adb 激活或无线调试激活
-  2. 装 v4 APK 后 `curl 127.0.0.1:18080/shizuku/status` → granted:true
-  3. `curl -X POST -d 'am start --display 21 -n com.chinamworld.main/.MainActivity' .../shell/exec`
-  4. `curl ".../screen/tree?display=21"` 应见中国移动界面；`/screen/screenshot?display=21` 应有图
-- 成功后把虚拟屏用法写进 AGENTS.md 注入段（RuntimeService.writeDeviceBridgeGuide 已含 vdisplay 段）
-- 注意：shizukuExec 是 20 秒超时轮询读 pty，长命令会被截断；后续可改 IRemoteProcess.waitFor 版本
+- **真机验收结果（Android 15 / HyperOS，无线调试激活 Shizuku，v14 versionCode 14 / 1.0.1）**：
+  1. `curl 127.0.0.1:18080/shizuku/status` → `{"shizuku":true,"granted":true}` ✅
+  2. `POST /screen/vdisplay/create` → `{"ok":true,"displayId":29}` ✅
+  3. `POST /shell/exec` body=`am start --display 29 -n com.android.settings/.Settings` → `{"exit":0,"output":"Starting: Intent..."}` ✅
+  4. `GET /screen/tree?display=29` → 完整设置界面 a11y 树 ✅；`GET /screen/screenshot?display=29` → 设置页 PNG ✅
+  5. `POST /screen/tap?display=29&x=..&y=..` → 手势注入生效，界面真实跳转（设置→我的设备）✅
+- **修复清单（相对 v4-shizuku 版）**：
+  - `shizukuExec` binder：`SystemServiceHelper.getSystemService("shizuku")` 在 Android 13+ 从 app 进程返回 null → 改 `Shizuku.getBinder()`
+  - 流读取：子进程退出后管道关闭抛 `IOException: Stream Closed` → EOF 容忍 + stdout/stderr 双流 + 真实 exit code
+  - **虚拟屏必须 PUBLIC**：app uid 的 private 虚拟屏拿不到 `WindowsForAccessibilityObserver`，a11y 树读不到 → `createVirtualDisplay` 加 `VIRTUAL_DISPLAY_FLAG_PUBLIC`（对齐两仪 twin 屏配方）
+  - `dumpTree` 跨 display：改用 API 30+ `getWindowsOnAllDisplays()`
+- 备注：`vdisplay/create` 非幂等，重复调用产生新屏，先 `vdisplay/destroy`
+- 参考：两仪（Twoyi）用 **shell uid (2000) host 进程**（app_process64）建 `twoyi-twin`（TRUSTED/OWN_DISPLAY_GROUP/OWN_FOCUS/ALWAYS_UNLOCKED/STEAL_TOP_FOCUS_DISABLED，touch VIRTUAL，1240x2444@520）；我们 app-uid PUBLIC 屏已达成同等能力（tree/tap/screenshot 全通）
 
 ### 🟡 P1：虚拟屏端到端验证
 - 无障碍树跨 display 需要 A11yService `getWindows()` 过滤 displayId（已实现，未真机验证）

@@ -349,15 +349,20 @@ stepActive(2);
             // powers from the first turn, with no user teaching required.
             File home = new File(getFilesDir(), RuntimeConfig.DIR_HOME);
             File wsRoot = new File(home, ".qwenpaw/workspaces");
+            if (!wsRoot.exists() && !wsRoot.mkdirs()) {
+                android.util.Log.w("qwenpaw-runtime",
+                        "bridge guide: workspace dir unavailable, skip AGENTS.md");
+                return;
+            }
             File[] agents = wsRoot.listFiles();
             if (agents != null) {
                 for (File agent : agents) {
                     if (!agent.isDirectory()) continue;
                     appendBridgeSection(new File(agent, "AGENTS.md"));
                 }
-                // Fresh installs boot with the default workspace created lazily.
-                appendBridgeSection(new File(wsRoot, "default/AGENTS.md"));
             }
+            // Fresh installs boot with the default workspace created lazily.
+            appendBridgeSection(new File(wsRoot, "default/AGENTS.md"));
         } catch (IOException e) {
             android.util.Log.w("qwenpaw-runtime", "bridge guide write failed", e);
         }
@@ -369,14 +374,25 @@ stepActive(2);
                     ? new String(java.nio.file.Files.readAllBytes(agentsMd.toPath()),
                             java.nio.charset.StandardCharsets.UTF_8)
                     : "";
-            if (existing.contains("127.0.0.1:18080")) return;
+            String MARKER = "## Device Bridge (built-in) v2";
+            // Replace any previous bridge section instead of skipping on the
+            // old marker: an old injected block (pre-/app/list) must be
+            // refreshed when the bridge guide is upgraded.
+            int old = existing.indexOf("## Device Bridge (built-in)");
+            if (old >= 0) {
+                int end = existing.indexOf("\n## ", old + 1);
+                existing = end >= 0 ? existing.substring(0, old) + existing.substring(end + 1)
+                        : existing.substring(0, old);
+            }
+            if (existing.contains(MARKER)) return;
             String NL = "\n";
             StringBuilder sec = new StringBuilder();
             if (!existing.isEmpty()) sec.append(existing).append(NL).append(NL);
-            sec.append("## Device Bridge (built-in)").append(NL).append(NL);
+            sec.append(MARKER).append(NL).append(NL);
             sec.append("You can control this phone natively over loopback HTTP on ")
                .append("127.0.0.1:18080 - no adb or root needed. Endpoints:").append(NL);
             sec.append("- GET  /status                a11y authorization + screen size").append(NL);
+            sec.append("- GET  /app/list              launchable apps as JSON (label+package)").append(NL);
             sec.append("- GET  /screen/tree           current screen as an accessibility tree").append(NL);
             sec.append("- POST /screen/tap   JSON body with x and y").append(NL);
             sec.append("- POST /screen/swipe  JSON body with x1,y1,x2,y2,ms").append(NL);
@@ -385,6 +401,12 @@ stepActive(2);
             sec.append("- POST /screen/swipe  JSON body: x1,y1,x2,y2,ms and optional display").append(NL);
             sec.append("- GET  /screen/screenshot?display=N   PNG of that screen").append(NL);
             sec.append("- POST /app/launch   JSON body: package, and optional display=N").append(NL);
+            sec.append("- POST /shell/exec   raw body is a shell command run through Shizuku").append(NL);
+            sec.append("        (privileged: am start/input/install; needs Shizuku granted)").append(NL);
+            sec.append(NL);
+            sec.append("APP INVENTORY FIRST: call GET /app/list before choosing an app to").append(NL);
+            sec.append("open - it returns the real installed names, never guess package").append(NL);
+            sec.append("names. Then launch with POST /app/launch {package}.").append(NL);
             sec.append(NL);
             sec.append("BACKGROUND SCREEN (like Twoyi/Mika, a hidden virtual display):").append(NL);
             sec.append("- POST /screen/vdisplay/create  JSON: width,height,dpi -> returns displayId").append(NL);

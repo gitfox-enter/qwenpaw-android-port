@@ -225,6 +225,38 @@ public class DeviceBridgeService extends Service {
                     bmp.compress(Bitmap.CompressFormat.PNG, 80, png);
                     return new Response(200, "image/png", png.toByteArray());
                 }
+                case "/app/list": {
+                    // Enumerate launchable apps so the agent knows what is
+                    // installed instead of guessing package names. Output is
+                    // JSON: [{"label":..,"package":..},...] sorted by label.
+                    java.util.List<android.content.pm.ResolveInfo> ris =
+                            getPackageManager().queryIntentActivities(
+                                    new Intent(Intent.ACTION_MAIN)
+                                            .addCategory(Intent.CATEGORY_LAUNCHER),
+                                    0);
+                    StringBuilder out = new StringBuilder("[");
+                    java.util.List<String[]> items = new java.util.ArrayList<>();
+                    java.util.Set<String> seen = new java.util.HashSet<>();
+                    for (android.content.pm.ResolveInfo ri : ris) {
+                        if (ri.activityInfo == null) continue;
+                        String pkg = ri.activityInfo.packageName;
+                        if (!seen.add(pkg)) continue;
+                        CharSequence label = ri.loadLabel(getPackageManager());
+                        items.add(new String[]{label == null ? pkg : label.toString(), pkg});
+                    }
+                    java.util.Collections.sort(items,
+                            (a, b) -> a[0].toLowerCase(java.util.Locale.ROOT)
+                                    .compareTo(b[0].toLowerCase(java.util.Locale.ROOT)));
+                    boolean first = true;
+                    for (String[] it : items) {
+                        if (!first) out.append(',');
+                        first = false;
+                        out.append("{\"label\":").append(jsonQuote(it[0]))
+                                .append(",\"package\":").append(jsonQuote(it[1])).append('}');
+                    }
+                    out.append(']');
+                    return json("{\"count\":" + items.size() + ",\"apps\":" + out + "}");
+                }
                 case "/app/launch": {
                     String pkg = req.body.trim();
                     if (pkg.startsWith("{")) {

@@ -31,7 +31,7 @@
 | Gradle 用户目录 | `D:\GradleHome\.gradle`（C 盘满的迁移成果，勿动） |
 | 构建命令 | `cd /d/qpmob/android && GRADLE_USER_HOME='D:\GradleHome\.gradle' ./gradle-dist-9.3.1/bin/gradle.bat --console=plain --no-daemon assembleRelease` |
 | APK 产物 | `android\app\build\outputs\apk\release\app-release.apk`（约 753MB） |
-| adb | `D:\WorkBuddy\lunatv-port\tools\android-sdk\platform-tools\adb.exe`（设备走无线调试，serial 为 mDNS 名） |
+| adb | `D:\WorkBuddy\android-sdk\android-sdk\platform-tools\adb.exe`（设备走无线调试，serial 为 mDNS 名；旧路径 `lunatv-port` 已迁移失效） |
 
 **装机法**（无线 adb）：`adb push <apk> /data/local/tmp/x.apk && adb shell pm install -r /data/local/tmp/x.apk`。MSYS 会改路径，务必 `MSYS2_ARG_CONV_EXCL='*'` 前缀；release 包无法 run-as。
 

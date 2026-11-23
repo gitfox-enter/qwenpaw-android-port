@@ -103,9 +103,15 @@
 
 > 你是 QwenPaw Android 移植项目的接手开发者。工程在 D:\qpmob（勿移动，长路径会炸 ninja），构建命令与全部背景见 D:\qpmob\HANDOVER.md 及 ZCode 记忆索引（qwenpaw-android-port / android-proot-integration-pitfalls / operit-ai-reference / qwenpaw-device-bridge）。
 >
-> 当前唯一进行中的任务：完成 Shizuku 虚拟屏提权闭环。步骤：
-> 1) 确认 `DeviceBridgeService.java` 的 shizukuExec 已用 `IShizukuService.newProcess` + `IRemoteProcess.getInputStream` 并编译通过（GRADLE_USER_HOME='D:\GradleHome\.gradle' ./gradle-dist-9.3.1/bin/gradle.bat assembleRelease）
-> 2) 装到真机（adb push + pm install -r，MSYS2_ARG_CONV_EXCL='*' 前缀），引导用户装 Shizuku App 并授权
-> 3) 验证链路：/shizuku/status → /screen/vdisplay/create → /shell/exec "am start --display N -n <pkg>" → /screen/tree?display=N
-> 4) 通过后把虚拟屏用法写进 RuntimeService 的 AGENTS.md 注入段，重打 APK
-> 不要开展新功能；完成后按用户常驻流程截图+挑剔 PM 评审。
+> **产品定位（2026-11-23 定）**：只维护本机增强版，**不做官方纯净版**（官方以后会自己做移动端）。增强版 = 预装 proot 完整客户端 + 自研能力（设备桥/局域网/headless 浏览器），**锁死只连本机**：`src/api/embedded.ts` 的 `EMBEDDED_AUTO_CONNECT=true` 使连接页 mode=self、隐藏手动地址/Platform/“再配对”入口；`me.tsx` 同步隐藏多配对行。
+>
+> **v15（versionCode 15 / 1.0.2）已构建装机**，核心能力：
+> 1. 虚拟屏闭环：`/shizuku/status` → `/screen/vdisplay/create` → `/shell/exec "am start --display N"` → `/screen/tree?display=N` → tap → screenshot，PUBLIC flag 是关键（private 屏 a11y 看不到）
+> 2. `/app/list`：338 个应用清单（agent 先查再启动，不猜包名）
+> 3. `/browser/*`：headless WebView（open/text/eval/close），AI 上网不装 Playwright
+> 4. UI 三修：外观页安全区、键盘 padding、predictiveBackGesture=false
+> 5. AGENTS.md 注入段 v2 版本标记（旧段可被替换，workspace 懒建已修）
+>
+> 构建命令：`cd /d/qpmob/android && TMPDIR=/d/tmp GRADLE_USER_HOME='D:\GradleHome\.gradle' ./gradle-dist-9.3.1/bin/gradle.bat --no-daemon assembleRelease`（**gradle.properties 里路径必须正斜杠**，反斜杠 `\t` 转义会炸 daemon）
+> 真机验证需先停 Podroid（QEMU TCG 吃 4GB 内存+120% CPU，会把 qwenpaw 桥饿死）；无线调试端口每次断连都变，用 `adb mdns services` 找新端口。
+> 后续（低优先）：更多主题、任务完成通知。

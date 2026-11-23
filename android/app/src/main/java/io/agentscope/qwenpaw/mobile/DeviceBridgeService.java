@@ -61,6 +61,8 @@ public class DeviceBridgeService extends Service {
     // and returns rendered text. Lighter than Playwright/Chromium in proot or
     // an xfce desktop - same idea as Operit's built-in browser tool.
     private android.webkit.WebView browser;
+    private String browserUrl;
+    private final Object browserUrlLock = new Object();
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -328,6 +330,9 @@ public class DeviceBridgeService extends Service {
                     try {
                         if (browser == null) browser = createBrowser();
                         browser.loadUrl(target);
+                        synchronized (browserUrlLock) {
+                            browserUrl = target;
+                        }
                     } catch (Exception e) {
                         failure[0] = e.getMessage();
                     } finally {
@@ -351,8 +356,12 @@ public class DeviceBridgeService extends Service {
 
     private Response browserStatus() {
         if (browser == null) return json("{\"open\":false}");
-        return json("{\"open\":true,\"url\":"
-                + jsonQuote(browser.getUrl() == null ? "" : browser.getUrl()) + "}");
+        // getUrl() must run on the main thread; keep the last requested URL
+        // cached instead so /browser/status is thread-safe.
+        synchronized (browserUrlLock) {
+            return json("{\"open\":true,\"url\":"
+                    + jsonQuote(browserUrl == null ? "" : browserUrl) + "}");
+        }
     }
 
     /** Extract the rendered text of the current page on the main thread. */
@@ -440,6 +449,9 @@ public class DeviceBridgeService extends Service {
                     } catch (Exception ignored) {
                     }
                     browser = null;
+                    synchronized (browserUrlLock) {
+                        browserUrl = null;
+                    }
                     synchronized (latch) {
                         latch.notify();
                     }

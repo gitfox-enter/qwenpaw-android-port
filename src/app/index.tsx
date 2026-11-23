@@ -61,9 +61,9 @@ import { colors, radius, spacing } from "../theme/tokens";
 
 type Mode = "choice" | "self" | "direct" | "platform" | "debug";
 
-// Embedded build flag: the native shell bundles the server and this UI, so the
-// connection screen auto-pairs with 127.0.0.1:<port> instead of asking.
-const EMBEDDED_AUTO_CONNECT = true;
+// Embedded build flag lives in ../api/embedded so other screens (me.tsx)
+// can hide the "pair another QwenPaw" flow too.
+import { EMBEDDED_AUTO_CONNECT } from "../api/embedded";
 
 export default function ConnectScreen() {
   const { add, platformLogin } = useLocalSearchParams<{
@@ -75,7 +75,7 @@ export default function ConnectScreen() {
   const connection = useAppStore((state) => state.connection);
   const connect = useAppStore((state) => state.connect);
   const [mode, setMode] = useState<Mode>(
-    platformLogin === "1" ? "platform" : "choice",
+    EMBEDDED_AUTO_CONNECT ? "self" : (platformLogin === "1" ? "platform" : "choice"),
   );
   const [baseUrl, setBaseUrl] = useState("");
   const [debugHost, setDebugHost] = useState(DEFAULT_DEBUG_HOST);
@@ -223,6 +223,9 @@ export default function ConnectScreen() {
   };
 
   const choosePlatform = async () => {
+    // Embedded build: the bundled server is the only pairing target, so the
+    // AgentScope Platform login (a remote connection source) is not offered.
+    if (EMBEDDED_AUTO_CONNECT) return;
     setPlatformChecking(true);
     setError(null);
     try {
@@ -591,7 +594,9 @@ function SelfPanel({ onMode }: { onMode: (mode: Mode) => void }) {
       <View style={styles.intro}><Text style={styles.formTitle}>配对自己的 QwenPaw</Text><Text style={styles.formCopy}>推荐从已登录 Console 扫码；配对后，除非你主动移除，否则会一直保持连接。</Text></View>
       <View style={styles.scanArt}><QrCode color={colors.accent} size={58} strokeWidth={1.35} /></View>
       <PrimaryButton icon={QrCode} label="扫码配对" onPress={() => router.push("/scan")} />
-      <Pressable onPress={() => onMode("direct")} style={styles.manualLink}><Server color={colors.muted} size={17} /><Text style={styles.manualText}>手动输入服务地址</Text></Pressable>
+      {!EMBEDDED_AUTO_CONNECT ? (
+        <Pressable onPress={() => onMode("direct")} style={styles.manualLink}><Server color={colors.muted} size={17} /><Text style={styles.manualText}>手动输入服务地址</Text></Pressable>
+      ) : null}
       {__DEV__ ? <Pressable onPress={() => onMode("debug")} style={styles.debugLink}><Bug color={colors.faint} size={14} /><Text style={styles.debugText}>本机 Debug 连接</Text></Pressable> : null}
       <Text style={styles.persistence}>凭据保存在设备安全存储中，不主动移除就会保持配对。</Text>
     </View>

@@ -12,7 +12,7 @@ import { Appearance, useColorScheme } from "react-native";
 
 // Web preview shim: react-native-web does not implement Appearance.setColorScheme.
 const setColorSchemeSafe = (scheme: ReturnType<typeof Appearance.getColorScheme>) => {
-  if (typeof Appearance.setColorScheme === "function") {
+  if (typeof Appearance.setColorScheme === "function" && scheme != null) {
     Appearance.setColorScheme(scheme);
   }
 };
@@ -35,7 +35,7 @@ interface ThemeContextValue {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const systemTheme = useColorScheme();
+  const systemTheme = useColorScheme() ?? "light";
   const [preference, setPreferenceState] = useState<ThemePreference>("system");
 
   useEffect(() => {

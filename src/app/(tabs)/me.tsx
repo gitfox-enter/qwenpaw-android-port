@@ -1,6 +1,7 @@
 import { MobileAlert } from "@/components/MobileAlert";
 import Constants from "expo-constants";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
+import { EMBEDDED_AUTO_CONNECT } from "../../api/embedded";
 import {
   Bot,
   Bell,
@@ -379,12 +380,14 @@ export default function MeScreen() {
               />
             );
           })}
-          <IosRow
-            icon={Plus}
-            label="再配对一只 QwenPaw"
-            onPress={() => router.push({ pathname: "/", params: { add: "1" } })}
-            subtitle="同时保留私人部署和 Platform 云端"
-          />
+          {EMBEDDED_AUTO_CONNECT ? null : (
+            <IosRow
+              icon={Plus}
+              label="再配对一只 QwenPaw"
+              onPress={() => router.push({ pathname: "/", params: { add: "1" } })}
+              subtitle="同时保留私人部署和 Platform 云端"
+            />
+          )}
         </IosGroup>
 
         <IosGroup title="当前 Agent">

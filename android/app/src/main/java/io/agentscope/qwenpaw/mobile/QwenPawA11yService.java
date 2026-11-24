@@ -6,6 +6,7 @@ import android.graphics.Bitmap;
 import android.graphics.Rect;
 import android.os.Build;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -124,6 +125,62 @@ public class QwenPawA11yService extends AccessibilityService {
     /** API 30+ accessibility screenshot; callback receives the bitmap or null. */
     public interface ShotCallback {
         void onResult(Bitmap bitmap);
+    }
+
+    /**
+     * Find the first clickable node whose text/description contains the query
+     * and return its tap coordinates as "x,y". Returns null if nothing found.
+     * Lets the agent tap an element by name without parsing the whole tree.
+     */
+    public static synchronized String findElement(String query, int displayId) {
+        QwenPawA11yService svc = INSTANCE.get();
+        if (svc == null || query == null || query.trim().isEmpty()) return null;
+        String q = query.trim().toLowerCase(java.util.Locale.ROOT);
+        AccessibilityNodeInfo root = null;
+        if (displayId < 0) {
+            root = svc.getRootInActiveWindow();
+        } else if (Build.VERSION.SDK_INT >= 30) {
+            android.util.SparseArray<java.util.List<AccessibilityWindowInfo>> byDisplay =
+                    svc.getWindowsOnAllDisplays();
+            java.util.List<AccessibilityWindowInfo> wins =
+                    byDisplay == null ? null : byDisplay.get(displayId);
+            if (wins != null) {
+                for (AccessibilityWindowInfo win : wins) {
+                    if (win.getType() == AccessibilityWindowInfo.TYPE_APPLICATION
+                            && win.getRoot() != null) {
+                        root = win.getRoot();
+                        break;
+                    }
+                }
+            }
+        }
+        if (root == null) return null;
+        Rect[] hit = new Rect[1];
+        walkFind(root, q, hit, new int[]{0});
+        if (hit[0] == null) return null;
+        int cx = (hit[0].left + hit[0].right) / 2;
+        int cy = (hit[0].top + hit[0].bottom) / 2;
+        return cx + "," + cy;
+    }
+
+    private static void walkFind(AccessibilityNodeInfo node, String q, Rect[] hit, int[] budget) {
+        if (node == null || hit[0] != null || budget[0] > 800) return;
+        budget[0]++;
+        String text = node.getText() == null ? "" : node.getText().toString();
+        String desc = node.getContentDescription() == null ? "" : node.getContentDescription().toString();
+        String hay = (text + " " + desc).toLowerCase(java.util.Locale.ROOT);
+        if (hay.contains(q)) {
+            Rect b = new Rect();
+            node.getBoundsInScreen(b);
+            if (node.isClickable() || b.width() > 0) {
+                hit[0] = b;
+                return;
+            }
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            walkFind(node.getChild(i), q, hit, budget);
+            if (hit[0] != null) return;
+        }
     }
 
     public static void takeScreenshot(ShotCallback cb) {

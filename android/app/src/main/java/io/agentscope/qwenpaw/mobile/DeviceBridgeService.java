@@ -168,6 +168,22 @@ public class DeviceBridgeService extends Service {
                     return ok(QwenPawA11yService.gesture(
                             intArg(req, "display", -1), x, y, x, y, 60));
                 }
+                case "/screen/find": {
+                    String q = req.body == null ? "" : req.body.trim();
+                    if (q.startsWith("{")) {
+                        q = q.replaceAll(".*\"(text|query|q)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\".*", "$2")
+                                .replace("\\n", "\n").replace("\\t", "\t").replace("\\\"", "\"");
+                    }
+                    if (q.isEmpty()) return err("text or query required");
+                    String coords = QwenPawA11yService.findElement(q, intArg(req, "display", -1));
+                    if (coords == null) return err("element not found: " + q);
+                    String[] xy = coords.split(",");
+                    int x = Integer.parseInt(xy[0].trim());
+                    int y = Integer.parseInt(xy[1].trim());
+                    boolean tapped = QwenPawA11yService.gesture(
+                            intArg(req, "display", -1), x, y, x, y, 60);
+                    return json("{\"found\":true,\"x\":" + x + ",\"y\":" + y + ",\"tapped\":" + tapped + "}");
+                }
                 case "/screen/swipe": {
                     boolean done = QwenPawA11yService.gesture(
                             intArg(req, "display", -1),
@@ -277,6 +293,31 @@ public class DeviceBridgeService extends Service {
                     }
                     out.append(']');
                     return json("{\"count\":" + items.size() + ",\"apps\":" + out + "}");
+                }
+                case "/app/current": {
+                    // Report the foreground app so the agent knows where it is.
+                    android.app.ActivityManager am =
+                            (android.app.ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+                    android.app.ActivityManager.RunningAppProcessInfo top = null;
+                    try {
+                        for (android.app.ActivityManager.RunningAppProcessInfo p :
+                                am.getRunningAppProcesses()) {
+                            if (p.importance == android.app.ActivityManager
+                                    .RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+                                    || p.importance == android.app.ActivityManager
+                                        .RunningAppProcessInfo.IMPORTANCE_VISIBLE) {
+                                top = p;
+                                break;
+                            }
+                        }
+                    } catch (Exception ignored) {
+                    }
+                    if (top == null || top.processName == null) {
+                        return json("{\"package\":\"\",\"process\":\"\"}");
+                    }
+                    return json("{\"package\":" + jsonQuote(top.pkgList.length > 0
+                            ? top.pkgList[0] : top.processName)
+                            + ",\"process\":" + jsonQuote(top.processName) + "}");
                 }
                 case "/app/launch": {
                     String pkg = req.body.trim();

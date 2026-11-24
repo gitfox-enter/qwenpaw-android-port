@@ -402,8 +402,10 @@ stepActive(2);
                 .append("root required. Endpoints:").append(NL);
             sec.append("- GET  /status                a11y authorization + screen size").append(NL);
             sec.append("- GET  /app/list              launchable apps as JSON (label+package)").append(NL);
+            sec.append("- GET  /app/current           the foreground app (package+process)").append(NL);
             sec.append("- GET  /screen/tree           current screen as an accessibility tree").append(NL);
             sec.append("- POST /screen/tap   JSON body: x and y (optional display=N)").append(NL);
+            sec.append("- POST /screen/find  JSON body: text to locate+tap directly").append(NL);
             sec.append("- POST /screen/swipe  JSON body: x1,y1,x2,y2,ms (optional display)").append(NL);
             sec.append("- POST /screen/scroll JSON body: direction=up/down/left/right").append(NL);
             sec.append("- GET  /screen/screenshot   PNG of the screen (or ?display=N)").append(NL);
@@ -421,11 +423,14 @@ stepActive(2);
             sec.append("By default /app/launch opens the app on the MAIN screen (user visible).").append(NL);
             sec.append("Pass display=<id> only when the user wants it in a background screen.").append(NL);
             sec.append(NL);
-            sec.append("SCREEN AUTOMATION flow: GET /screen/tree to locate an element and its")
-                .append("coordinates, POST /screen/tap {x,y} to click it, then GET /screen/tree")
-                .append("again to confirm. Use /screen/scroll or /screen/swipe to move through")
+            sec.append("SCREEN AUTOMATION flow: for a quick tap by visible text, use")
+                .append("POST /screen/find {\"text\":\"按钮文字\"} - it locates the element and")
+                .append("taps it in one call. Otherwise GET /screen/tree to locate an element")
+                .append("and its coordinates, POST /screen/tap {x,y} to click it, then GET")
+                .append("/screen/tree again to confirm. Use /screen/scroll or /screen/swipe")
                 .append(NL);
-            sec.append("lists. Take a PNG via /screen/screenshot when you need visual proof.").append(NL);
+            sec.append("to move through lists. Take a PNG via /screen/screenshot when you need")
+                .append("visual proof.").append(NL);
             sec.append(NL);
             sec.append("WEB BROWSING (built-in headless browser, no downloads needed):").append(NL);
             sec.append("- POST /browser/open   body: url to load (https:// added if missing)").append(NL);

@@ -298,6 +298,25 @@ public class DeviceBridgeService extends Service {
                     java.util.Collections.sort(items,
                             (a, b) -> a[0].toLowerCase(java.util.Locale.ROOT)
                                     .compareTo(b[0].toLowerCase(java.util.Locale.ROOT)));
+                    int total = items.size();
+                    // Optional ?q= substring filter and ?limit= cap so a large
+                    // app inventory does not flood the agent with irrelevant
+                    // entries (e.g. q=wechat returns just the matching apps).
+                    String q = req.query.get("q");
+                    if (q != null && !q.trim().isEmpty()) {
+                        String needle = q.trim().toLowerCase(java.util.Locale.ROOT);
+                        java.util.List<String[]> filtered = new java.util.ArrayList<>();
+                        for (String[] it : items) {
+                            if (it[0].toLowerCase(java.util.Locale.ROOT).contains(needle)
+                                    || it[1].toLowerCase(java.util.Locale.ROOT).contains(needle)) {
+                                filtered.add(it);
+                            }
+                        }
+                        items = filtered;
+                    }
+                    int limit = intArg(req, "limit", total);
+                    if (limit < 0) limit = total;
+                    if (items.size() > limit) items = items.subList(0, limit);
                     boolean first = true;
                     for (String[] it : items) {
                         if (!first) out.append(',');
@@ -306,7 +325,8 @@ public class DeviceBridgeService extends Service {
                                 .append(",\"package\":").append(jsonQuote(it[1])).append('}');
                     }
                     out.append(']');
-                    return json("{\"count\":" + items.size() + ",\"apps\":" + out + "}");
+                    return json("{\"count\":" + total + ",\"returned\":" + items.size()
+                            + ",\"apps\":" + out + "}");
                 }
                 case "/app/current": {
                     // Report the foreground app so the agent knows where it is.
@@ -1024,7 +1044,7 @@ public class DeviceBridgeService extends Service {
     }
 
     private static Response json(String body) {
-        return new Response(200, "application/json",
+        return new Response(200, "application/json; charset=utf-8",
                 body.getBytes(StandardCharsets.UTF_8));
     }
 

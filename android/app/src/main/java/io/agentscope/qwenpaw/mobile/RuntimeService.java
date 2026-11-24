@@ -401,7 +401,8 @@ stepActive(2);
                 .append("screens - all over loopback HTTP on 127.0.0.1:18080. No adb or")
                 .append("root required. Endpoints:").append(NL);
             sec.append("- GET  /status                a11y authorization + screen size").append(NL);
-            sec.append("- GET  /app/list              launchable apps as JSON (label+package)").append(NL);
+            sec.append("- GET  /app/list              launchable apps as JSON (label+package)")
+                .append("; add ?q=<substring> to filter and ?limit=N to cap").append(NL);
             sec.append("- GET  /app/current           the foreground app (package+process)").append(NL);
             sec.append("- GET  /screen/tree           current screen as an accessibility tree").append(NL);
             sec.append("- GET  /screen/text           current screen as plain text (fast read)").append(NL);

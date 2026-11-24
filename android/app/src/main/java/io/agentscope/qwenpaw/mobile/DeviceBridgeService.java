@@ -221,7 +221,7 @@ public class DeviceBridgeService extends Service {
                     return json("{\"active\":true,\"displayId\":" + vdDisplayId + "}");
                 }
                 case "/browser/open": {
-                    return browserOpen(req.body.trim());
+                    return browserOpen(bodyStr(req, "url"));
                 }
                 case "/browser/status": {
                     return browserStatus();
@@ -230,7 +230,7 @@ public class DeviceBridgeService extends Service {
                     return browserText();
                 }
                 case "/browser/eval": {
-                    return browserEval(req.body.trim());
+                    return browserEval(bodyStr(req, "script"));
                 }
                 case "/browser/close": {
                     return browserClose();
@@ -1013,6 +1013,26 @@ public class DeviceBridgeService extends Service {
         } catch (NumberFormatException e) {
             return fallback;
         }
+    }
+
+    /**
+     * Extract a string field from a JSON request body, falling back to the
+     * whole body when it is a bare value (no JSON object). Lets body-based
+     * endpoints accept both {"url":"…"} and a plain "…" payload.
+     */
+    private String bodyStr(Request req, String name) {
+        String body = req.body == null ? "" : req.body.trim();
+        if (body.isEmpty()) return "";
+        if (!body.startsWith("{")) return body;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("\"" + java.util.regex.Pattern.quote(name) + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
+                .matcher(body);
+        if (m.find()) {
+            return m.group(1)
+                    .replace("\\n", "\n").replace("\\t", "\t")
+                    .replace("\\\"", "\"").replace("\\\\", "\\");
+        }
+        return "";
     }
 
     private void write(Socket sock, Response resp) throws IOException {

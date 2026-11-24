@@ -102,6 +102,55 @@ public class QwenPawA11yService extends AccessibilityService {
         return s.length() > 120 ? s.substring(0, 120) + "…" : s;
     }
 
+    /**
+     * Plain, human-readable text of the active window: concatenation of the
+     * text and content-description of visible nodes, one line per node,
+     * width-limited. Lets the agent read screen content without parsing the
+     * full accessibility tree.
+     */
+    public static synchronized String screenText(int displayId) {
+        QwenPawA11yService svc = INSTANCE.get();
+        if (svc == null) return "accessibility service not connected";
+        AccessibilityNodeInfo root = null;
+        if (displayId < 0) {
+            root = svc.getRootInActiveWindow();
+        } else if (Build.VERSION.SDK_INT >= 30) {
+            android.util.SparseArray<java.util.List<AccessibilityWindowInfo>> byDisplay =
+                    svc.getWindowsOnAllDisplays();
+            java.util.List<AccessibilityWindowInfo> wins =
+                    byDisplay == null ? null : byDisplay.get(displayId);
+            if (wins != null) {
+                for (AccessibilityWindowInfo win : wins) {
+                    if (win.getType() == AccessibilityWindowInfo.TYPE_APPLICATION
+                            && win.getRoot() != null) {
+                        root = win.getRoot();
+                        break;
+                    }
+                }
+            }
+        }
+        if (root == null) return "no active window on display " + displayId;
+        StringBuilder sb = TREE_BUILDER;
+        sb.setLength(0);
+        walkText(root, new int[]{0});
+        return sb.length() == 0 ? "(empty screen)" : sb.toString();
+    }
+
+    private static void walkText(AccessibilityNodeInfo node, int[] budget) {
+        if (node == null || budget[0] > 1200) return;
+        budget[0]++;
+        String text = node.getText() == null ? "" : node.getText().toString().trim();
+        String desc = node.getContentDescription() == null ? "" : node.getContentDescription().toString().trim();
+        if (!text.isEmpty() || !desc.isEmpty()) {
+            StringBuilder line = TREE_BUILDER;
+            String label = text.isEmpty() ? desc : (desc.isEmpty() ? text : text + " (" + desc + ")");
+            line.append(abbreviate(label)).append('\n');
+        }
+        for (int i = 0; i < node.getChildCount(); i++) {
+            walkText(node.getChild(i), budget);
+        }
+    }
+
     /** Swipe gesture; duration 0 uses the system default. */
     public static boolean gesture(int displayId, float x1, float y1, float x2, float y2, long ms) {
         QwenPawA11yService svc = INSTANCE.get();

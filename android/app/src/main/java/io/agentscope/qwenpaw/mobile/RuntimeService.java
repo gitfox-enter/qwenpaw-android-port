@@ -404,6 +404,7 @@ stepActive(2);
             sec.append("- GET  /app/list              launchable apps as JSON (label+package)").append(NL);
             sec.append("- GET  /app/current           the foreground app (package+process)").append(NL);
             sec.append("- GET  /screen/tree           current screen as an accessibility tree").append(NL);
+            sec.append("- GET  /screen/text           current screen as plain text (fast read)").append(NL);
             sec.append("- POST /screen/tap   JSON body: x and y (optional display=N)").append(NL);
             sec.append("- POST /screen/find  JSON body: text to locate+tap directly").append(NL);
             sec.append("- POST /screen/longpress JSON body: x,y (optional ms) - hold a tap").append(NL);
@@ -412,8 +413,11 @@ stepActive(2);
             sec.append("- POST /screen/scroll JSON body: direction=up/down/left/right").append(NL);
             sec.append("- GET  /screen/screenshot   PNG of the screen (or ?display=N)").append(NL);
             sec.append("- POST /app/launch   JSON body: package (optional display=N)").append(NL);
+            sec.append("- POST /app/install  JSON body: {apk: local path or http url} (needs Shizuku)").append(NL);
+            sec.append("- POST /app/uninstall JSON body: {package: ...} (needs Shizuku)").append(NL);
             sec.append("- POST /input/text  JSON body: text to type into the focused field").append(NL);
             sec.append("- POST /clipboard   JSON body: {\"set\":\"...\"} to set; GET to read").append(NL);
+            sec.append("- GET  /notification/list active notifications as JSON").append(NL);
             sec.append("- POST /shell/exec  raw body is a shell command run through Shizuku").append(NL);
             sec.append("        (privileged: am start/input/install; needs Shizuku granted)").append(NL);
             sec.append(NL);
@@ -455,9 +459,15 @@ stepActive(2);
                 .append("destroy the display when done (create is not idempotent).").append(NL);
             sec.append(NL);
             sec.append("SETUP CHECKS: if /status reports connected=false, tell the user to")
-                .append("enable the QwenPaw accessibility service in system settings. If")
+                .append("enable the QwenPaw accessibility service in system settings")
+                .append("(设置→无障碍→已安装的服务→QwenPaw 屏幕驱动→打开). If")
                 .append("/shizuku/status reports granted=false and a step needs shell power,")
-                .append("tell the user to authorize QwenPaw inside the Shizuku app.").append(NL);
+                .append("tell the user to open the Shizuku app, find QwenPaw in its")
+                .append("authorization list and grant it (Shizuku 需要无线调试激活, 每次重启").append(NL);
+            sec.append("后需重新激活). Shizuku grants shell-level power for /input/text,")
+                .append("/shell/exec, installs and other privileged steps; without it the")
+                .append("agent can still read/tap/swipe via accessibility but cannot run shell")
+                .append("commands.").append(NL);
 writeText(agentsMd, sec.toString());
             android.util.Log.i("qwenpaw-runtime",
                     "bridge section written: " + agentsMd.getPath());

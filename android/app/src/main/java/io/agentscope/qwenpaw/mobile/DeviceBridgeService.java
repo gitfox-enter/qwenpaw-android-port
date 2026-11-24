@@ -161,6 +161,10 @@ public class DeviceBridgeService extends Service {
                     int disp = intArg(req, "display", -1);
                     return text(QwenPawA11yService.dumpTree(disp));
                 }
+                case "/screen/text": {
+                    int disp = intArg(req, "display", -1);
+                    return text(QwenPawA11yService.screenText(disp));
+                }
                 case "/screen/tap": {
                     int x = intArg(req, "x", -1);
                     int y = intArg(req, "y", -1);
@@ -367,6 +371,12 @@ public class DeviceBridgeService extends Service {
                 }
                 case "/notification/list": {
                     return notificationList();
+                }
+                case "/app/install": {
+                    return appInstall(req);
+                }
+                case "/app/uninstall": {
+                    return appUninstall(req);
                 }
                 default:
                     return err("unknown endpoint: " + req.path);
@@ -922,11 +932,65 @@ public class DeviceBridgeService extends Service {
         }
     }
 
-    /** List active notifications; empty array if none can be read. */
+    /** List active notifications via NotificationManager (no listener needed). */
     private Response notificationList() {
-        // Notifications need a bound NotificationListenerService; the bridge
-        // service is not one, so report what we can and stay honest.
-        return json("{\"count\":0,\"note\":\"no notification listener bound; grant a listener or use /screen/tree\"}");
+        try {
+            android.app.NotificationManager nm =
+                    (android.app.NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return json("{\"count\":0,\"notifications\":[]}");
+            android.service.notification.StatusBarNotification[] active = nm.getActiveNotifications();
+            StringBuilder out = new StringBuilder("[");
+            boolean first = true;
+            for (android.service.notification.StatusBarNotification sbn : active) {
+                if (sbn == null) continue;
+                android.app.Notification n = sbn.getNotification();
+                if (n == null || n.extras == null) continue;
+                if (!first) out.append(',');
+                first = false;
+                Object title = n.extras.get(android.app.Notification.EXTRA_TITLE);
+                Object text = n.extras.get(android.app.Notification.EXTRA_TEXT);
+                String pkg = String.valueOf(sbn.getPackageName());
+                out.append("{\"package\":").append(jsonQuote(pkg))
+                        .append(",\"title\":").append(jsonQuote(String.valueOf(title)))
+                        .append(",\"text\":").append(jsonQuote(String.valueOf(text))).append('}');
+            }
+            out.append(']');
+            return json("{\"count\":" + active.length + ",\"notifications\":" + out + "}");
+        } catch (Exception e) {
+            return json("{\"count\":0,\"notifications\":[],"
+                    + "\"note\":\"read failed: " + jsonQuote(String.valueOf(e.getMessage())) + "\"}");
+        }
+    }
+
+    /** Install an APK the agent can reach (local file path or http(s) URL) via Shizuku. */
+    private Response appInstall(Request req) {
+        String apk = bodyStr(req, "apk").trim();
+        if (apk.isEmpty()) apk = bodyStr(req, "path").trim();
+        if (apk.isEmpty()) return err("apk (local path or http url) required");
+        if (!shizukuGranted()) {
+            return err("app install needs Shizuku authorization; enable it first");
+        }
+        try {
+            String out = shizukuExecRaw("pm install -r \"" + apk + "\"");
+            return text(out);
+        } catch (Exception e) {
+            return err("app install: " + e.getMessage());
+        }
+    }
+
+    /** Uninstall a package via Shizuku. */
+    private Response appUninstall(Request req) {
+        String pkg = bodyStr(req, "package").trim();
+        if (pkg.isEmpty()) return err("package required");
+        if (!shizukuGranted()) {
+            return err("app uninstall needs Shizuku authorization; enable it first");
+        }
+        try {
+            String out = shizukuExecRaw("pm uninstall \"" + pkg + "\"");
+            return text(out);
+        } catch (Exception e) {
+            return err("app uninstall: " + e.getMessage());
+        }
     }
 
     private boolean shizukuGranted() {

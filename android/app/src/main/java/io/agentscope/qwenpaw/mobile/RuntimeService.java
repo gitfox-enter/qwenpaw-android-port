@@ -335,12 +335,19 @@ stepActive(2);
             sb.append("QwenPaw Device Bridge is live on 127.0.0.1:18080.").append(nl);
             sb.append("Endpoints (loopback only, no auth):").append(nl);
             sb.append("- GET  /status                service + a11y authorization state").append(nl);
+            sb.append("- GET  /app/list              launchable apps as JSON (label+package)").append(nl);
             sb.append("- GET  /screen/tree           accessibility tree (text/coords/clickable)").append(nl);
             sb.append("- POST /screen/tap   {x,y}    tap at coordinates (JSON body)").append(nl);
             sb.append("- POST /screen/swipe {x1,y1,x2,y2,ms}  swipe or long-press").append(nl);
+            sb.append("- POST /screen/scroll {direction}  up/down/left/right scroll").append(nl);
             sb.append("- GET  /screen/screenshot     PNG screenshot (Android 11+)").append(nl);
             sb.append("- POST /app/launch   {package} launch app by package name").append(nl);
-            sb.append("Workflow: /screen/tree to locate an element -> /screen/tap -> /screen/tree").append(nl);
+            sb.append("- POST /input/text  {text}    type text into the focused field").append(nl);
+            sb.append("- POST /clipboard   {set}     set clipboard (GET reads it)").append(nl);
+            sb.append("- POST /browser/*  headless WebView (open/status/text/eval/close)").append(nl);
+            sb.append("- POST /shell/exec  shell command via Shizuku (needs grant)").append(nl);
+            sb.append("Workflow: GET /app/list before launching any app - never guess package").append(nl);
+            sb.append("names. /screen/tree to locate an element -> /screen/tap -> /screen/tree").append(nl);
             sb.append("to confirm. If connected=false, guide the user to enable the").append(nl);
             sb.append("accessibility toggle in system settings.").append(nl);
             writeText(new File(rootfs, "opt/qwenpaw/DEVICE_BRIDGE.md"), sb.toString());
@@ -374,7 +381,7 @@ stepActive(2);
                     ? new String(java.nio.file.Files.readAllBytes(agentsMd.toPath()),
                             java.nio.charset.StandardCharsets.UTF_8)
                     : "";
-            String MARKER = "## Device Bridge (built-in) v2";
+            String MARKER = "## Device Bridge (built-in) v3";
             // Replace any previous bridge section instead of skipping on the
             // old marker: an old injected block (pre-/app/list) must be
             // refreshed when the bridge guide is upgraded.
@@ -388,25 +395,37 @@ stepActive(2);
             String NL = "\n";
             StringBuilder sec = new StringBuilder();
             if (!existing.isEmpty()) sec.append(existing).append(NL).append(NL);
-            sec.append(MARKER).append(NL).append(NL);
-            sec.append("You can control this phone natively over loopback HTTP on ")
-               .append("127.0.0.1:18080 - no adb or root needed. Endpoints:").append(NL);
+                        sec.append(MARKER).append(NL).append(NL);
+            sec.append("You can drive this phone directly - read the screen, tap, swipe,")
+                .append("launch apps, type text, browse the web, and run hidden background")
+                .append("screens - all over loopback HTTP on 127.0.0.1:18080. No adb or")
+                .append("root required. Endpoints:").append(NL);
             sec.append("- GET  /status                a11y authorization + screen size").append(NL);
             sec.append("- GET  /app/list              launchable apps as JSON (label+package)").append(NL);
             sec.append("- GET  /screen/tree           current screen as an accessibility tree").append(NL);
-            sec.append("- POST /screen/tap   JSON body with x and y").append(NL);
-            sec.append("- POST /screen/swipe  JSON body with x1,y1,x2,y2,ms").append(NL);
-            sec.append("- GET  /screen/tree?display=N       accessibility tree of a screen").append(NL);
-            sec.append("- POST /screen/tap   JSON body: x,y and optional display=N").append(NL);
-            sec.append("- POST /screen/swipe  JSON body: x1,y1,x2,y2,ms and optional display").append(NL);
-            sec.append("- GET  /screen/screenshot?display=N   PNG of that screen").append(NL);
-            sec.append("- POST /app/launch   JSON body: package, and optional display=N").append(NL);
-            sec.append("- POST /shell/exec   raw body is a shell command run through Shizuku").append(NL);
+            sec.append("- POST /screen/tap   JSON body: x and y (optional display=N)").append(NL);
+            sec.append("- POST /screen/swipe  JSON body: x1,y1,x2,y2,ms (optional display)").append(NL);
+            sec.append("- POST /screen/scroll JSON body: direction=up/down/left/right").append(NL);
+            sec.append("- GET  /screen/screenshot   PNG of the screen (or ?display=N)").append(NL);
+            sec.append("- POST /app/launch   JSON body: package (optional display=N)").append(NL);
+            sec.append("- POST /input/text  JSON body: text to type into the focused field").append(NL);
+            sec.append("- POST /clipboard   JSON body: {\"set\":\"...\"} to set; GET to read").append(NL);
+            sec.append("- POST /shell/exec  raw body is a shell command run through Shizuku").append(NL);
             sec.append("        (privileged: am start/input/install; needs Shizuku granted)").append(NL);
             sec.append(NL);
-            sec.append("APP INVENTORY FIRST: call GET /app/list before choosing an app to").append(NL);
-            sec.append("open - it returns the real installed names, never guess package").append(NL);
-            sec.append("names. Then launch with POST /app/launch {package}.").append(NL);
+            sec.append("APP INVENTORY FIRST (hard rule): whenever the user asks what apps are")
+                .append("installed or asks to open an app, call GET /app/list FIRST and pick")
+                .append("the exact package from the returned list. NEVER guess package names")
+                .append("- guessing fails (e.g. the real package for 中国移动 is")
+                .append("com.chinamworld.main). Then POST /app/launch {package}.").append(NL);
+            sec.append("By default /app/launch opens the app on the MAIN screen (user visible).").append(NL);
+            sec.append("Pass display=<id> only when the user wants it in a background screen.").append(NL);
+            sec.append(NL);
+            sec.append("SCREEN AUTOMATION flow: GET /screen/tree to locate an element and its")
+                .append("coordinates, POST /screen/tap {x,y} to click it, then GET /screen/tree")
+                .append("again to confirm. Use /screen/scroll or /screen/swipe to move through")
+                .append(NL);
+            sec.append("lists. Take a PNG via /screen/screenshot when you need visual proof.").append(NL);
             sec.append(NL);
             sec.append("WEB BROWSING (built-in headless browser, no downloads needed):").append(NL);
             sec.append("- POST /browser/open   body: url to load (https:// added if missing)").append(NL);
@@ -414,25 +433,25 @@ stepActive(2);
             sec.append("- GET  /browser/text   rendered page text (read this after open)").append(NL);
             sec.append("- POST /browser/eval   body: JS to run in the page, returns result").append(NL);
             sec.append("- POST /browser/close release the page").append(NL);
-            sec.append("For web pages/questions use the browser endpoints; do NOT try to").append(NL);
-            sec.append("download Playwright or a desktop browser - the bridge already").append(NL);
-            sec.append("renders pages with the system WebView. Typical flow: /browser/open").append(NL);
-            sec.append("-> wait a few seconds -> /browser/text (repeat text until loaded).").append(NL);
+            sec.append("For anything on the web use the browser endpoints; do NOT download")
+                .append("Playwright or a desktop browser - the bridge already renders pages")
+                .append("with the system WebView. Typical flow: /browser/open -> wait a few")
+                .append("seconds -> /browser/text (repeat until the content has loaded).").append(NL);
             sec.append(NL);
-            sec.append("BACKGROUND SCREEN (like Twoyi/Mika, a hidden virtual display):").append(NL);
-            sec.append("- POST /screen/vdisplay/create  JSON: width,height,dpi -> returns displayId").append(NL);
+            sec.append("BACKGROUND SCREEN (hidden virtual display, like Twoyi/Mika):").append(NL);
+            sec.append("- POST /screen/vdisplay/create  JSON: width,height,dpi -> displayId").append(NL);
             sec.append("- POST /screen/vdisplay/destroy  release it").append(NL);
             sec.append("- GET  /screen/vdisplay/status   is it active").append(NL);
-            sec.append("Flow: create -> launch apps with display=<id> -> tap/swipe/tree").append(NL);
-            sec.append("screenshot with display=<id>. The user keeps using the main screen").append(NL);
-            sec.append("while apps run hidden in the background. Prefer this for app").append(NL);
-            sec.append("automation so the foreground stays untouched.").append(NL);
+            sec.append("Flow: create -> launch apps with display=<id> -> tap/swipe/tree/").append(NL);
+            sec.append("screenshot with display=<id>. The user keeps the main screen free while")
+                .append("apps run hidden. Prefer this for background automation. Remember to")
+                .append("destroy the display when done (create is not idempotent).").append(NL);
             sec.append(NL);
-            sec.append("Standard flow: GET /screen/tree to locate an element, tap it with").append(NL);
-            sec.append("/screen/tap, then re-check with /screen/tree. If /status reports").append(NL);
-            sec.append("connected=false, ask the user to enable the QwenPaw accessibility").append(NL);
-            sec.append("service in system settings.").append(NL);
-            writeText(agentsMd, sec.toString());
+            sec.append("SETUP CHECKS: if /status reports connected=false, tell the user to")
+                .append("enable the QwenPaw accessibility service in system settings. If")
+                .append("/shizuku/status reports granted=false and a step needs shell power,")
+                .append("tell the user to authorize QwenPaw inside the Shizuku app.").append(NL);
+writeText(agentsMd, sec.toString());
             android.util.Log.i("qwenpaw-runtime",
                     "bridge section written: " + agentsMd.getPath());
         } catch (IOException e) {

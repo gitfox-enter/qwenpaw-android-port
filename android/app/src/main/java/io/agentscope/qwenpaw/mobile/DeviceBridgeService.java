@@ -284,7 +284,12 @@ public class DeviceBridgeService extends Service {
                         pkg = req.body.replaceAll(".*\"package\"\\s*:\\s*\"([^\"]+)\".*", "$1");
                     }
                     int disp = intArg(req, "display", -1);
-                    if (disp == vdDisplayId && vdisplay == null) {
+                    // Only block when the caller explicitly asked for the virtual
+                    // display and it is not created. Without a display arg the app
+                    // opens on the main screen (disp == -1 must not match the
+                    // initial vdDisplayId, which is also -1 before any screen).
+                    boolean wantsVirtual = req.query.containsKey("display");
+                    if (wantsVirtual && disp == vdDisplayId && vdisplay == null) {
                         return err("virtual display not created; POST /screen/vdisplay/create first");
                     }
                     if (pkg.isEmpty()) return err("package required");
@@ -299,6 +304,18 @@ public class DeviceBridgeService extends Service {
                         startActivity(i);
                     }
                     return ok(true);
+                }
+                case "/input/text": {
+                    return inputText(req.body.trim());
+                }
+                case "/screen/scroll": {
+                    return screenScroll(req);
+                }
+                case "/clipboard": {
+                    return clipboard(req);
+                }
+                case "/notification/list": {
+                    return notificationList();
                 }
                 default:
                     return err("unknown endpoint: " + req.path);
@@ -736,6 +753,113 @@ public class DeviceBridgeService extends Service {
     private String screenMetrics() {
         android.util.DisplayMetrics m = getResources().getDisplayMetrics();
         return m.widthPixels + "x" + m.heightPixels;
+    }
+
+    /** Type text into the focused field. Uses Shizuku `input text` when
+     * granted; shell quoting keeps spaces and non-ASCII intact. */
+    private Response inputText(String rawBody) {
+        try {
+            if (rawBody.isEmpty()) return err("text required");
+            String text = rawBody.startsWith("{")
+                    ? rawBody.replaceAll(".*\"text\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\".*", "$1")
+                            .replace("\\n", "\n").replace("\\t", "\t").replace("\\\"", "\"")
+                    : rawBody;
+            if (text.isEmpty()) return err("text required");
+            if (!shizukuGranted()) {
+                return err("input text needs Shizuku authorization; enable it first");
+            }
+            StringBuilder cmd = new StringBuilder("input text ");
+            cmd.append('"').append(text.replace("\\", "\\\\").replace("\"", "\\\""))
+                    .append('"');
+            return text(shizukuExecRaw(cmd.toString()));
+        } catch (Exception e) {
+            return err("input text: " + e.getMessage());
+        }
+    }
+
+    /** Scroll the current screen. direction: up/down/left/right. */
+    private Response screenScroll(Request req) {
+        String dir = req.query.getOrDefault("direction", "down").toLowerCase();
+        int x = intArg(req, "x", -1);
+        int y = intArg(req, "y", -1);
+        int distance = intArg(req, "distance", 400);
+        int x1, y1, x2, y2;
+        switch (dir) {
+            case "up":
+                x1 = x < 0 ? 540 : x; y1 = y < 0 ? 1200 : y; x2 = x1; y2 = y1 - distance; break;
+            case "down":
+                x1 = x < 0 ? 540 : x; y1 = y < 0 ? 200 : y; x2 = x1; y2 = y1 + distance; break;
+            case "left":
+                x1 = x < 0 ? 1000 : x; y1 = y < 0 ? 500 : y; x2 = x1 - distance; y2 = y1; break;
+            case "right":
+                x1 = x < 0 ? 280 : x; y1 = y < 0 ? 500 : y; x2 = x1 + distance; y2 = y1; break;
+            default:
+                return err("direction must be up/down/left/right");
+        }
+        int disp = intArg(req, "display", -1);
+        boolean done = QwenPawA11yService.gesture(disp, x1, y1, x2, y2, 300);
+        if (done) return ok(true);
+        if (!shizukuGranted()) {
+            return err("scroll failed via a11y; Shizuku needed for swipe fallback");
+        }
+        String cmd = "input swipe " + x1 + " " + y1 + " " + x2 + " " + y2 + " 300"
+                + (disp >= 0 ? " --display " + disp : "");
+        return text(shizukuExecRaw(cmd));
+    }
+
+    /** Set or read the clipboard. POST body {set:"..."} sets; GET reads. */
+    private Response clipboard(Request req) {
+        try {
+            android.content.ClipboardManager cm =
+                    (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm == null) return err("clipboard unavailable");
+            String set = req.body == null ? null
+                    : req.body.replaceAll(".*\"set\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\".*", "$1")
+                            .replace("\\n", "\n").replace("\\t", "\t").replace("\\\"", "\"");
+            if (set != null && !set.isEmpty() && (req.body != null && req.body.startsWith("{"))) {
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("qwenpaw", set));
+                return ok(true);
+            }
+            android.content.ClipData.Item item = cm.getPrimaryClip() != null
+                    ? cm.getPrimaryClip().getItemAt(0) : null;
+            String val = item == null ? "" : String.valueOf(item.coerceToText(this));
+            return json("{\"text\":" + jsonQuote(val) + "}");
+        } catch (Exception e) {
+            return err("clipboard: " + e.getMessage());
+        }
+    }
+
+    /** List active notifications; empty array if none can be read. */
+    private Response notificationList() {
+        // Notifications need a bound NotificationListenerService; the bridge
+        // service is not one, so report what we can and stay honest.
+        return json("{\"count\":0,\"note\":\"no notification listener bound; grant a listener or use /screen/tree\"}");
+    }
+
+    private boolean shizukuGranted() {
+        try {
+            return rikka.shizuku.Shizuku.pingBinder()
+                    && rikka.shizuku.Shizuku.checkSelfPermission()
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** Run a shell command through Shizuku and return the raw stdout+stderr. */
+    private String shizukuExecRaw(String cmd) {
+        Response r = shizukuExec(cmd);
+        if (r.type.startsWith("application/json")
+                && r.body.length > 0 && r.body[0] == '{') {
+            String s = new String(r.body, StandardCharsets.UTF_8);
+            int eq = s.indexOf("\"error\":\"");
+            if (eq >= 0) {
+                int start = eq + 9;
+                int end = s.indexOf('"', start);
+                throw new IllegalStateException(s.substring(start, end < 0 ? s.length() : end));
+            }
+        }
+        return new String(r.body, StandardCharsets.UTF_8);
     }
 
     private static Response ok(boolean done) {

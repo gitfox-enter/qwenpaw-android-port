@@ -60,3 +60,4 @@ android/app/src/main/assets/*.part
 rootfs*
 .expo/
 *.bin.zip
+find-test.json

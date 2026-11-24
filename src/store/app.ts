@@ -44,7 +44,8 @@ import {
   savePinnedChatId,
 } from "../storage/pinnedChat";
 import { clearPlatformSession } from "../storage/platformSession";
-import { disablePushSubscription } from "../notifications/service";
+import { disablePushSubscription, notifyTaskComplete } from "../notifications/service";
+import { isChatFocused } from "../notifications/focus";
 import { loadNotificationPreferences } from "../notifications/storage";
 import {
   clearPendingChatTurn,
@@ -53,6 +54,18 @@ import {
   pendingUserMessagePersisted,
   savePendingChatTurn,
 } from "../storage/pendingChat";
+
+// Fire a local completion notification when a chat run finishes while the
+// user is not currently viewing it. No-op while the chat is focused, so
+// watching a run finish never spawns a redundant notification.
+async function completeNotice(
+  chat: ChatSpec | undefined,
+  chatId: string,
+): Promise<void> {
+  if (isChatFocused(chatId)) return;
+  const name = chat?.name?.trim() ? chat.name.trim() : "任务";
+  await notifyTaskComplete(`「${name}」已完成，点击查看`).catch(() => undefined);
+}
 
 interface AppState {
   status: "booting" | "disconnected" | "connecting" | "ready";
@@ -689,6 +702,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!failed) {
         await get().loadChat(chat.id, false).catch(() => undefined);
       }
+      void completeNotice(chat, chat.id);
     }
   },
 
@@ -798,6 +812,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!failed) {
         await get().loadChat(chatId, false).catch(() => undefined);
       }
+      void completeNotice(chat, chatId);
     }
   },
 

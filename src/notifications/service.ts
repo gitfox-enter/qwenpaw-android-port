@@ -123,3 +123,29 @@ export async function disablePushSubscription(
     .catch(() => undefined);
   return disabled;
 }
+
+/**
+ * Show a local notification when a chat task finishes. Unlike push
+ * notifications this needs no EAS project: it posts directly through the
+ * local expo-notifications module on the device itself.
+ */
+export async function notifyTaskComplete(
+  body: string,
+  title = "任务已完成",
+): Promise<void> {
+  if (Platform.OS !== "android" || !Device.isDevice) return;
+  const Notifications = await loadNotifications();
+  if (!Notifications) return;
+  const permission = await Notifications.getPermissionsAsync();
+  if (!permission.granted) return;
+  await configureNotificationChannel();
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      sound: "default",
+      title,
+      body,
+      data: { source: "qwenpaw_task_complete" },
+    },
+    trigger: null,
+  });
+}

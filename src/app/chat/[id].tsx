@@ -57,6 +57,7 @@ import { useSessionControls } from "../../features/chat/useSessionControls";
 import { resolveAgentAppearance } from "../../storage/agentAppearance";
 import { useAppStore } from "../../store/app";
 import { selectChatMessages } from "../../store/selectors";
+import { markChatFocused } from "../../notifications/focus";
 import { colors, radius, spacing } from "../../theme/tokens";
 
 interface PendingAttachment {
@@ -137,6 +138,13 @@ export default function ChatScreen() {
       detachStream(id);
     };
   }, [detachStream, id, loadChat, reconnectChat, status]));
+
+  // Mark this chat as the one the user is viewing, so a task that finishes
+  // while the screen is open does not also push a redundant notification.
+  useFocusEffect(useCallback(() => {
+    markChatFocused(id);
+    return () => markChatFocused(null);
+  }, [id]));
 
   useFocusEffect(useCallback(() => {
     let busy = false;

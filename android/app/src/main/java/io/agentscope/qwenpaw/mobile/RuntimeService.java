@@ -406,6 +406,8 @@ stepActive(2);
             sec.append("- GET  /screen/tree           current screen as an accessibility tree").append(NL);
             sec.append("- POST /screen/tap   JSON body: x and y (optional display=N)").append(NL);
             sec.append("- POST /screen/find  JSON body: text to locate+tap directly").append(NL);
+            sec.append("- POST /screen/longpress JSON body: x,y (optional ms) - hold a tap").append(NL);
+            sec.append("- POST /screen/key   JSON body: key=back|home|enter|escape|delete|<code>").append(NL);
             sec.append("- POST /screen/swipe  JSON body: x1,y1,x2,y2,ms (optional display)").append(NL);
             sec.append("- POST /screen/scroll JSON body: direction=up/down/left/right").append(NL);
             sec.append("- GET  /screen/screenshot   PNG of the screen (or ?display=N)").append(NL);

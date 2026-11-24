@@ -122,6 +122,41 @@ public class QwenPawA11yService extends AccessibilityService {
         return svc.dispatchGesture(builder.build(), null, null);
     }
 
+    /** Long-press gesture at (x,y): a held-down tap, for context menus etc. */
+    public static boolean gestureLong(int displayId, float x, float y, long ms) {
+        QwenPawA11yService svc = INSTANCE.get();
+        if (svc == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
+        GestureDescription.Builder builder = new GestureDescription.Builder();
+        if (displayId >= 0 && Build.VERSION.SDK_INT >= 33) {
+            builder.setDisplayId(displayId);
+        }
+        android.graphics.Path path = new android.graphics.Path();
+        path.moveTo(x, y);
+        path.lineTo(x, y);
+        builder.addStroke(new GestureDescription.StrokeDescription(
+                path, 0, ms > 0 ? ms : 800));
+        return svc.dispatchGesture(builder.build(), null, null);
+    }
+
+    /** Inject a hardware key via accessibility global actions (back/home etc.). */
+    public static boolean globalAction(String action) {
+        QwenPawA11yService svc = INSTANCE.get();
+        if (svc == null) return false;
+        if (action == null) return false;
+        switch (action) {
+            case "back":
+                return svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
+            case "home":
+                return svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME);
+            case "recents":
+                return svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_RECENTS);
+            case "notifications":
+                return svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS);
+            default:
+                return false;
+        }
+    }
+
     /** API 30+ accessibility screenshot; callback receives the bitmap or null. */
     public interface ShotCallback {
         void onResult(Bitmap bitmap);

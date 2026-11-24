@@ -168,6 +168,16 @@ public class DeviceBridgeService extends Service {
                     return ok(QwenPawA11yService.gesture(
                             intArg(req, "display", -1), x, y, x, y, 60));
                 }
+                case "/screen/longpress": {
+                    int lx = intArg(req, "x", -1);
+                    int ly = intArg(req, "y", -1);
+                    if (lx < 0 || ly < 0) return err("x,y required");
+                    return ok(QwenPawA11yService.gestureLong(
+                            intArg(req, "display", -1), lx, ly, intArg(req, "ms", 800)));
+                }
+                case "/screen/key": {
+                    return screenKey(req);
+                }
                 case "/screen/find": {
                     String q = req.body == null ? "" : req.body.trim();
                     if (q.startsWith("{")) {
@@ -846,6 +856,48 @@ public class DeviceBridgeService extends Service {
         String cmd = "input swipe " + x1 + " " + y1 + " " + x2 + " " + y2 + " 300"
                 + (disp >= 0 ? " --display " + disp : "");
         return text(shizukuExecRaw(cmd));
+    }
+
+    /** Inject a hardware key: a11y global action where available, Shizuku keyevent otherwise. */
+    private Response screenKey(Request req) {
+        String key = bodyStr(req, "key").trim().toLowerCase(java.util.Locale.ROOT);
+        if (key.isEmpty()) return err("key required");
+        switch (key) {
+            case "back":
+                return ok(QwenPawA11yService.globalAction("back"));
+            case "home":
+                return ok(QwenPawA11yService.globalAction("home"));
+            case "recents":
+                return ok(QwenPawA11yService.globalAction("recents"));
+            case "notifications":
+                return ok(QwenPawA11yService.globalAction("notifications"));
+            case "enter":
+            case "search_enter":
+                return keyevent(android.view.KeyEvent.KEYCODE_ENTER);
+            case "escape":
+                return keyevent(android.view.KeyEvent.KEYCODE_ESCAPE);
+            case "delete":
+                return keyevent(android.view.KeyEvent.KEYCODE_DEL);
+            default:
+                try {
+                    return keyevent(Integer.parseInt(key));
+                } catch (NumberFormatException e) {
+                    return err("key must be back/home/recents/notifications/enter/escape/delete or a numeric code");
+                }
+        }
+    }
+
+    /** Inject an arbitrary keycode through Shizuku's input keyevent command. */
+    private Response keyevent(int code) {
+        if (!shizukuGranted()) {
+            return err("this key needs Shizuku authorization; enable it first");
+        }
+        try {
+            String out = shizukuExecRaw("input keyevent " + code);
+            return text(out);
+        } catch (Exception e) {
+            return err("keyevent: " + e.getMessage());
+        }
     }
 
     /** Set or read the clipboard. POST body {set:"..."} sets; GET reads. */

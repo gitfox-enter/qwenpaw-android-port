@@ -1,7 +1,6 @@
 package io.agentscope.qwenpaw.mobile
 import expo.modules.splashscreen.SplashScreenManager
 
-import android.os.Build
 import android.os.Bundle
 
 import com.facebook.react.ReactActivity
@@ -50,16 +49,11 @@ class MainActivity : ReactActivity() {
     * @see <a href="https://developer.android.com/reference/android/app/Activity#onBackPressed()">onBackPressed</a>
     */
   override fun invokeDefaultOnBackPressed() {
-      if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.R) {
-          if (!moveTaskToBack(false)) {
-              // For non-root activities, use the default implementation to finish them.
-              super.invokeDefaultOnBackPressed()
-          }
-          return
+      // 让返回键回到桌面而非退出应用：JS 侧（expo-router/BackHandler）会先
+      // 消费返回弹出内层页面；走到这里说明已在根界面，把任务移到后台即可，
+      // 不要 finish Activity 直接退出。moveTaskToBack 对所有 API 生效。
+      if (!moveTaskToBack(false)) {
+          super.invokeDefaultOnBackPressed()
       }
-
-      // Use the default back button implementation on Android S
-      // because it's doing more than [Activity.moveTaskToBack] in fact.
-      super.invokeDefaultOnBackPressed()
   }
 }

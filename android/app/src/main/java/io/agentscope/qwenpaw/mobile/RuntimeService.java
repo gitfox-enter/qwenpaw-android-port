@@ -381,7 +381,7 @@ stepActive(2);
                     ? new String(java.nio.file.Files.readAllBytes(agentsMd.toPath()),
                             java.nio.charset.StandardCharsets.UTF_8)
                     : "";
-            String MARKER = "## Device Bridge (built-in) v3";
+            String MARKER = "## Device Bridge (built-in) v4";
             // Replace any previous bridge section instead of skipping on the
             // old marker: an old injected block (pre-/app/list) must be
             // refreshed when the bridge guide is upgraded.
@@ -419,8 +419,26 @@ stepActive(2);
             sec.append("- POST /input/text  JSON body: text to type into the focused field").append(NL);
             sec.append("- POST /clipboard   JSON body: {\"set\":\"...\"} to set; GET to read").append(NL);
             sec.append("- GET  /notification/list active notifications as JSON").append(NL);
-            sec.append("- POST /shell/exec  raw body is a shell command run through Shizuku").append(NL);
-            sec.append("        (privileged: am start/input/install; needs Shizuku granted)").append(NL);
+            sec.append("- POST /shell/exec  raw body is a shell command run through Shizuku")
+                .append(" or self-ADB (auto fallback)").append(NL);
+            sec.append("        (privileged: am start/input/install; needs Shizuku granted")
+                .append(" or self-ADB connected)").append(NL);
+            sec.append(NL);
+            sec.append("SELF-ADB (wireless debugging, no Shizuku app needed): the app can")
+                .append("pair with its own adbd over loopback and run shell at uid 2000.")
+                .append("Use these to activate the self-ADB channel:").append(NL);
+            sec.append("- POST /adb/pair  JSON body: {host, port, code} pairs with the").append(NL);
+            sec.append("        wireless-debug pairing port (6-digit code from the phone)").append(NL);
+            sec.append("- POST /adb/connect JSON body: {host, port} connects to the wireless")
+                .append("        debug connect port (the one shown on the wireless")
+                .append("        debugging home page, different from the pairing port)").append(NL);
+            sec.append("- GET  /adb/status whether the keypair exists and the channel is")
+                .append("        active").append(NL);
+            sec.append("- POST /adb/exec   raw body is a shell command run through self-ADB").append(NL);
+            sec.append("Typical one-time activation: open 开发者选项→无线调试, run /adb/pair")
+                .append("with the pairing IP:port+code, then /adb/connect with the connect")
+                .append("IP:port. After that /shell/exec and privileged actions auto-fallback")
+                .append("to self-ADB if Shizuku is unavailable.").append(NL);
             sec.append(NL);
             sec.append("APP INVENTORY FIRST (hard rule): whenever the user asks what apps are")
                 .append("installed or asks to open an app, call GET /app/list FIRST and pick")
@@ -463,12 +481,10 @@ stepActive(2);
                 .append("enable the QwenPaw accessibility service in system settings")
                 .append("(设置→无障碍→已安装的服务→QwenPaw 屏幕驱动→打开). If")
                 .append("/shizuku/status reports granted=false and a step needs shell power,")
-                .append("tell the user to open the Shizuku app, find QwenPaw in its")
-                .append("authorization list and grant it (Shizuku 需要无线调试激活, 每次重启").append(NL);
-            sec.append("后需重新激活). Shizuku grants shell-level power for /input/text,")
-                .append("/shell/exec, installs and other privileged steps; without it the")
-                .append("agent can still read/tap/swipe via accessibility but cannot run shell")
-                .append("commands.").append(NL);
+                .append("either ask the user to grant Shizuku, or use the self-ADB path")
+                .append("(/adb/pair + /adb/connect with the wireless-debugging pairing and")
+                .append("connect ports) - both give uid 2000 shell power, self-ADB needs no")
+                .append("extra app.").append(NL);
 writeText(agentsMd, sec.toString());
             android.util.Log.i("qwenpaw-runtime",
                     "bridge section written: " + agentsMd.getPath());

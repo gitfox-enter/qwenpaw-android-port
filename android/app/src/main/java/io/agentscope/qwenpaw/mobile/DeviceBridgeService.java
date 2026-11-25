@@ -17,6 +17,7 @@ import android.os.IBinder;
 import android.view.Display;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -24,6 +25,15 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -63,6 +73,16 @@ public class DeviceBridgeService extends Service {
     private android.webkit.WebView browser;
     private String browserUrl;
     private final Object browserUrlLock = new Object();
+
+    // Self-wireless-debug (DSH Go style): the app pairs with its own adbd over
+    // loopback and runs shell commands at uid 2000 without a Shizuku app. The
+    // RSA keypair is persisted so the device accepts us after a re-pair.
+    private static final String ADB_KEY_DIR =
+            "adb_keys";
+    private static final String ADB_PUB_FILE = "id_rsa.pub";
+    private static final String ADB_PRIV_FILE = "id_rsa.pk8";
+    private KeyPair adbKeyPair;
+    private final Object adbKeyLock = new Object();
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -223,10 +243,79 @@ public class DeviceBridgeService extends Service {
                         bound = false;
                         granted = false;
                     }
-                    return json("{\"shizuku\":" + bound + ",\"granted\":" + granted + "}");
+                    boolean adb = adbConnectedProbe();
+                    return json("{\"shizuku\":" + bound + ",\"granted\":" + granted
+                            + ",\"adb\":" + adb + ",\"shell\":"
+                            + (granted || adb) + "}");
                 }
                 case "/shell/exec": {
                     return shizukuExec(req.body);
+                }
+                case "/adb/pair": {
+                    String host = req.query.get("host");
+                    int port = intArg(req, "port", 0);
+                    String code = req.body == null ? "" : req.body.trim();
+                    if (host == null || host.isEmpty() || port <= 0) {
+                        return err("host and port required");
+                    }
+                    if (code.isEmpty()) {
+                        code = req.query.get("code");
+                    }
+                    if (code.isEmpty()) return err("pairing code required");
+                    try {
+                        AdbClient client = new AdbClient(adbKeyPair());
+                        client.pair(host, port, code);
+                        client.close();
+                        return json("{\"adb\":\"paired\",\"host\":\""
+                                + host + "\",\"port\":" + port + "}");
+                    } catch (Exception e) {
+                        return err("adb pair: " + e.getMessage());
+                    }
+                }
+                case "/adb/connect": {
+                    String host = req.query.get("host");
+                    int port = intArg(req, "port", 0);
+                    if (host == null || host.isEmpty() || port <= 0) {
+                        return err("host and port required");
+                    }
+                    try {
+                        AdbClient client = new AdbClient(adbKeyPair());
+                        client.connect(host, port);
+                        AdbClient.ShellResult r = client.execShell("echo adb-connected");
+                        client.close();
+                        getSharedPreferences("qwenpaw_bridge",
+                                android.content.Context.MODE_PRIVATE)
+                                .edit().putString("adb_host", host)
+                                .putInt("adb_port", port).apply();
+                        return json("{\"adb\":\"connected\",\"host\":\"" + host
+                                + "\",\"port\":" + port
+                                + ",\"shell\":\"" + jsonQuote(r.stdoutText().trim()) + "\"}");
+                    } catch (Exception e) {
+                        return err("adb connect: " + e.getMessage());
+                    }
+                }
+                case "/adb/status": {
+                    return json("{\"paired\":" + adbKeyPairLoaded()
+                            + ",\"activated\":" + adbConnectedProbe() + "}");
+                }
+                case "/adb/exec": {
+                    String cmd = req.body == null ? "" : req.body.trim();
+                    if (cmd.isEmpty()) return err("command required");
+                    try {
+                        AdbClient client = new AdbClient(adbKeyPair());
+                        String host = req.query.get("host");
+                        int port = intArg(req, "port", 0);
+                        if (host != null && !host.isEmpty() && port > 0) {
+                            client.connect(host, port);
+                        }
+                        AdbClient.ShellResult r = client.execShell(cmd);
+                        client.close();
+                        return json("{\"exit\":" + r.exitCode + ",\"stdout\":"
+                                + jsonQuote(r.stdoutText())
+                                + ",\"stderr\":" + jsonQuote(r.stderrText()) + "}");
+                    } catch (Exception e) {
+                        return err("adb exec: " + e.getMessage());
+                    }
                 }
                 case "/screen/vdisplay/status": {
                     if (vdisplay == null) {
@@ -602,10 +691,23 @@ public class DeviceBridgeService extends Service {
                 bound = false;
             }
             if (!bound) {
-                return err("shizuku not running; install/start the Shizuku app first");
+                // Shizuku app is not running. Fall back to self-wireless-debug
+                // (uid 2000 shell) instead of failing — same privilege level,
+                // no separate Shizuku app required (DSH Go approach).
+                if (adbConnectedProbe()) {
+                    return adbExecJson(cmd);
+                }
+                return err("shizuku not running and self-adb not connected; "
+                        + "open wireless debugging and call /adb/pair + /adb/connect");
             }
             if (rikka.shizuku.Shizuku.checkSelfPermission()
                     != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                // Shizuku running but QwenPaw not yet authorized. Prefer the
+                // self-adb fallback so the agent still gets shell power without
+                // an extra manual grant step.
+                if (adbConnectedProbe()) {
+                    return adbExecJson(cmd);
+                }
                 return err("shizuku permission not granted yet; authorize QwenPaw "
                         + "inside the Shizuku app, then retry");
             }
@@ -846,13 +948,10 @@ public class DeviceBridgeService extends Service {
                             .replace("\\n", "\n").replace("\\t", "\t").replace("\\\"", "\"")
                     : rawBody;
             if (text.isEmpty()) return err("text required");
-            if (!shizukuGranted()) {
-                return err("input text needs Shizuku authorization; enable it first");
-            }
             StringBuilder cmd = new StringBuilder("input text ");
             cmd.append('"').append(text.replace("\\", "\\\\").replace("\"", "\\\""))
                     .append('"');
-            return text(shizukuExecRaw(cmd.toString()));
+            return text(shellExecRaw(cmd.toString()));
         } catch (Exception e) {
             return err("input text: " + e.getMessage());
         }
@@ -880,12 +979,13 @@ public class DeviceBridgeService extends Service {
         int disp = intArg(req, "display", -1);
         boolean done = QwenPawA11yService.gesture(disp, x1, y1, x2, y2, 300);
         if (done) return ok(true);
-        if (!shizukuGranted()) {
-            return err("scroll failed via a11y; Shizuku needed for swipe fallback");
-        }
         String cmd = "input swipe " + x1 + " " + y1 + " " + x2 + " " + y2 + " 300"
                 + (disp >= 0 ? " --display " + disp : "");
-        return text(shizukuExecRaw(cmd));
+        try {
+            return text(shellExecRaw(cmd));
+        } catch (Exception e) {
+            return err("scroll fallback failed: " + e.getMessage());
+        }
     }
 
     /** Inject a hardware key: a11y global action where available, Shizuku keyevent otherwise. */
@@ -917,13 +1017,10 @@ public class DeviceBridgeService extends Service {
         }
     }
 
-    /** Inject an arbitrary keycode through Shizuku's input keyevent command. */
+    /** Inject an arbitrary keycode via the shell channel (Shizuku or self-adb). */
     private Response keyevent(int code) {
-        if (!shizukuGranted()) {
-            return err("this key needs Shizuku authorization; enable it first");
-        }
         try {
-            String out = shizukuExecRaw("input keyevent " + code);
+            String out = shellExecRaw("input keyevent " + code);
             return text(out);
         } catch (Exception e) {
             return err("keyevent: " + e.getMessage());
@@ -987,11 +1084,8 @@ public class DeviceBridgeService extends Service {
         String apk = bodyStr(req, "apk").trim();
         if (apk.isEmpty()) apk = bodyStr(req, "path").trim();
         if (apk.isEmpty()) return err("apk (local path or http url) required");
-        if (!shizukuGranted()) {
-            return err("app install needs Shizuku authorization; enable it first");
-        }
         try {
-            String out = shizukuExecRaw("pm install -r \"" + apk + "\"");
+            String out = shellExecRaw("pm install -r \"" + apk + "\"");
             return text(out);
         } catch (Exception e) {
             return err("app install: " + e.getMessage());
@@ -1002,11 +1096,8 @@ public class DeviceBridgeService extends Service {
     private Response appUninstall(Request req) {
         String pkg = bodyStr(req, "package").trim();
         if (pkg.isEmpty()) return err("package required");
-        if (!shizukuGranted()) {
-            return err("app uninstall needs Shizuku authorization; enable it first");
-        }
         try {
-            String out = shizukuExecRaw("pm uninstall \"" + pkg + "\"");
+            String out = shellExecRaw("pm uninstall \"" + pkg + "\"");
             return text(out);
         } catch (Exception e) {
             return err("app uninstall: " + e.getMessage());
@@ -1020,6 +1111,124 @@ public class DeviceBridgeService extends Service {
                     == android.content.pm.PackageManager.PERMISSION_GRANTED;
         } catch (Throwable t) {
             return false;
+        }
+    }
+
+    // ------------------------------------------------------------ self-adb
+
+    /** Load (or generate) the persisted RSA keypair used for self-ADB pairing. */
+    private KeyPair adbKeyPair() {
+        synchronized (adbKeyLock) {
+            if (adbKeyPair != null) return adbKeyPair;
+            try {
+                File dir = new File(getFilesDir(), ADB_KEY_DIR);
+                if (!dir.exists() && !dir.mkdirs()) {
+                    throw new IOException("cannot create adb key dir");
+                }
+                File pub = new File(dir, ADB_PUB_FILE);
+                File priv = new File(dir, ADB_PRIV_FILE);
+                if (pub.exists() && priv.exists()) {
+                    byte[] privBytes = Files.readAllBytes(priv.toPath());
+                    byte[] pubBytes = Files.readAllBytes(pub.toPath());
+                    PKCS8EncodedKeySpec privSpec = new PKCS8EncodedKeySpec(privBytes);
+                    X509EncodedKeySpec pubSpec = new X509EncodedKeySpec(pubBytes);
+                    PrivateKey pk = KeyFactory.getInstance("RSA").generatePrivate(privSpec);
+                    PublicKey pubk = KeyFactory.getInstance("RSA").generatePublic(pubSpec);
+                    adbKeyPair = new KeyPair(pubk, pk);
+                    return adbKeyPair;
+                }
+                KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
+                gen.initialize(2048);
+                adbKeyPair = gen.generateKeyPair();
+                Files.write(pub.toPath(), adbKeyPair.getPublic().getEncoded());
+                Files.write(priv.toPath(), adbKeyPair.getPrivate().getEncoded());
+                return adbKeyPair;
+            } catch (Exception e) {
+                android.util.Log.e("qwenpaw-bridge", "adb keypair init failed", e);
+                throw new IllegalStateException("adb keypair init failed: " + e.getMessage());
+            }
+        }
+    }
+
+    /** Whether the persisted ADB keypair exists (device already paired). */
+    private boolean adbKeyPairLoaded() {
+        synchronized (adbKeyLock) {
+            try {
+                File dir = new File(getFilesDir(), ADB_KEY_DIR);
+                return new File(dir, ADB_PUB_FILE).exists()
+                        && new File(dir, ADB_PRIV_FILE).exists();
+            } catch (Throwable t) {
+                return false;
+            }
+        }
+    }
+
+    /**
+     * Best-effort check that a self-ADB shell channel can run. Probes the
+     * last-known connect port; if it fails we treat ADB as unavailable and
+     * the agent should call /adb/connect again after re-pairing.
+     */
+    private boolean adbConnectedProbe() {
+        String host = getSharedPreferences("qwenpaw_bridge",
+                android.content.Context.MODE_PRIVATE)
+                .getString("adb_host", null);
+        int port = getSharedPreferences("qwenpaw_bridge",
+                android.content.Context.MODE_PRIVATE)
+                .getInt("adb_port", 0);
+        if (host == null || port <= 0) return false;
+        try {
+            AdbClient client = new AdbClient(adbKeyPair());
+            client.connect(host, port);
+            AdbClient.ShellResult r = client.execShell("echo ok");
+            client.close();
+            return r.exitCode == 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Run a shell command through self-ADB (wireless debug), caching host/port. */
+    private String adbExec(String cmd) throws Exception {
+        android.content.SharedPreferences prefs = getSharedPreferences(
+                "qwenpaw_bridge", android.content.Context.MODE_PRIVATE);
+        String host = prefs.getString("adb_host", null);
+        int port = prefs.getInt("adb_port", 0);
+        AdbClient client = new AdbClient(adbKeyPair());
+        if (host != null && !host.isEmpty() && port > 0) {
+            client.connect(host, port);
+        }
+        try {
+            AdbClient.ShellResult r = client.execShell(cmd);
+            String out = r.stdoutText();
+            if (r.exitCode != 0 && !r.stderrText().isEmpty()) {
+                out = out + r.stderrText();
+            }
+            return out;
+        } finally {
+            client.close();
+        }
+    }
+
+    /** Execute via self-ADB and wrap the result as the same JSON as /shell/exec. */
+    private Response adbExecJson(String cmd) {
+        try {
+            android.content.SharedPreferences prefs = getSharedPreferences(
+                    "qwenpaw_bridge", android.content.Context.MODE_PRIVATE);
+            String host = prefs.getString("adb_host", null);
+            int port = prefs.getInt("adb_port", 0);
+            AdbClient client = new AdbClient(adbKeyPair());
+            if (host != null && !host.isEmpty() && port > 0) {
+                client.connect(host, port);
+            }
+            try {
+                AdbClient.ShellResult r = client.execShell(cmd.trim());
+                return json("{\"exit\":" + r.exitCode + ",\"output\":"
+                        + jsonQuote(r.stdoutText() + r.stderrText()) + "}");
+            } finally {
+                client.close();
+            }
+        } catch (Exception e) {
+            return err("self-adb exec: " + e.getMessage());
         }
     }
 
@@ -1037,6 +1246,22 @@ public class DeviceBridgeService extends Service {
             }
         }
         return new String(r.body, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Unified shell exec: prefer Shizuku when granted, otherwise fall back to
+     * the self-wireless-debug channel (uid 2000). Throws if both fail.
+     */
+    private String shellExecRaw(String cmd) {
+        if (shizukuGranted()) {
+            return shizukuExecRaw(cmd);
+        }
+        try {
+            return adbExec(cmd);
+        } catch (Exception e) {
+            throw new IllegalStateException("no shell channel (shizuku or self-adb): "
+                    + e.getMessage(), e);
+        }
     }
 
     private static Response ok(boolean done) {

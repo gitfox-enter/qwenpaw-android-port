@@ -1,6 +1,7 @@
 import { router, Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
+import { BackHandler } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { MobileAlertHost } from "../components/MobileAlert";
@@ -43,6 +44,24 @@ function AppNavigator() {
     });
     return () => dispose?.();
   }, [status]);
+
+  // Global hardware back handling. We always consume the back press so the
+  // app never falls through to the native default (which would move the task
+  // to the background / exit to the desktop). On an inner screen we pop the
+  // navigation stack; at the root there is nothing to pop, so back is a
+  // no-op and the user stays in the app.
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener(
+      "hardwareBackPress",
+      () => {
+        if (router.canGoBack()) {
+          router.back();
+        }
+        return true;
+      },
+    );
+    return () => subscription.remove();
+  }, []);
 
   useEffect(() => {
     if (status !== "ready" || !connection) return;

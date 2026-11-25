@@ -109,7 +109,7 @@ test("extracts screenshot paths from tool arguments and text results", () => {
         data: {
           name: "send_file_to_user",
           arguments: JSON.stringify({
-            file_path: "/Users/ray/workspace/desktop_screenshot.png",
+            file_path: "/Users/user/workspace/desktop_screenshot.png",
           }),
         },
       }],
@@ -124,7 +124,7 @@ test("extracts screenshot paths from tool arguments and text results", () => {
           name: "desktop_screenshot",
           output: JSON.stringify([{
             type: "text",
-            text: "Desktop screenshot saved to /Users/ray/workspace/desktop_screenshot.png",
+            text: "Desktop screenshot saved to /Users/user/workspace/desktop_screenshot.png",
           }]),
         },
       }],
@@ -137,7 +137,7 @@ test("extracts screenshot paths from tool arguments and text results", () => {
   assert.match(messages[2].toolOutput ?? "", /Desktop screenshot saved/);
   assert.deepEqual(turn.resultMedia, [{
     type: "image",
-    url: "/Users/ray/workspace/desktop_screenshot.png",
+    url: "/Users/user/workspace/desktop_screenshot.png",
     name: "desktop_screenshot.png",
   }]);
 });
